@@ -1,0 +1,12 @@
+overlay:
+  roi: [1450, 360, 420, 50]
+  method: "gray_mean"
+  gray_open_lt: 120.0
+  consecutive_required: 2
+click:
+  jitter_px: 2
+  move_delay_ms: [40, 120]
+  click_delay_ms: [40, 80]
+safety:
+  pre_confirm_guard_ms: 120
+  cancel_on_close: true

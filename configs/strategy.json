@@ -1,0 +1,45 @@
+{
+  "filters": [
+    {
+      "override_targets": [
+        "banker"
+      ],
+      "when": "last_winner=='P'"
+    }
+  ],
+  "limits": {
+    "max_retries": 1,
+    "per_round_cap": 5000,
+    "session_stop_loss": -20000,
+    "session_take_profit": 30000
+  },
+  "split_units": {
+    "b_pair": 1,
+    "banker": 1,
+    "lucky6": 1,
+    "p_pair": 1,
+    "player": 1,
+    "tie": 1
+  },
+  "staking": {
+    "base_units": 1,
+    "max_steps": 3,
+    "reset_on_win": true,
+    "type": "fixed"
+  },
+  "targets": [
+    "banker"
+  ],
+  "timing": {
+    "click_delay_ms": [
+      40,
+      80
+    ],
+    "move_delay_ms": [
+      40,
+      120
+    ],
+    "pre_confirm_wait_ms": 120
+  },
+  "unit": 1000
+}

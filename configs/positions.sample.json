@@ -1,0 +1,54 @@
+{
+  "version": 2,
+  "description": "百家樂遊戲元素位置配置範例",
+  "screen": {
+    "width": 1920,
+    "height": 1080,
+    "dpi_scale": 1.0,
+    "last_updated": "2024-09-22T14:00:00Z"
+  },
+
+  "points": {
+    "chip_100": {"x": 1650, "y": 950},
+    "chip_1k": {"x": 1720, "y": 950},
+    "chip_5k": {"x": 1790, "y": 950},
+    "chip_10k": {"x": 1650, "y": 980},
+    "chip_50k": {"x": 1720, "y": 980},
+    "player": {"x": 750, "y": 700},
+    "banker": {"x": 1170, "y": 700},
+    "tie": {"x": 960, "y": 650},
+    "p_pair": {"x": 650, "y": 600},
+    "b_pair": {"x": 1270, "y": 600},
+    "lucky6": {"x": 1170, "y": 550},
+    "confirm": {"x": 1750, "y": 850},
+    "cancel": {"x": 1650, "y": 850}
+  },
+
+  "roi": {
+    "overlay": {"x": 1450, "y": 360, "w": 420, "h": 50},
+    "player_stack": {"x": 720, "y": 670, "w": 120, "h": 60},
+    "banker_stack": {"x": 1140, "y": 670, "w": 120, "h": 60},
+    "tie_stack": {"x": 930, "y": 620, "w": 120, "h": 60}
+  },
+
+  "validation": {
+    "chip_denominations": [100, 1000, 5000, 10000, 50000],
+    "bet_targets": ["player", "banker", "tie", "p_pair", "b_pair", "lucky6"],
+    "required_templates": [
+      "templates/chips/chip_100.png",
+      "templates/chips/chip_1k.png",
+      "templates/chips/chip_5k.png",
+      "templates/chips/chip_10k.png",
+      "templates/chips/chip_50k.png",
+      "templates/bets/bet_player.png",
+      "templates/bets/bet_banker.png",
+      "templates/bets/bet_tie.png",
+      "templates/bets/bet_p_pair.png",
+      "templates/bets/bet_b_pair.png",
+      "templates/bets/bet_lucky6.png",
+      "templates/controls/btn_confirm.png",
+      "templates/controls/btn_cancel.png",
+      "templates/controls/overlay_anchor.png"
+    ]
+  }
+}

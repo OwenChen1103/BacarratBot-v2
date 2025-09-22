@@ -1,0 +1,6 @@
+best_scale,1.00
+best_score,0.998
+screenshot_w,1920
+screenshot_h,1080
+dpi_scale,1.00
+timestamp,2025-09-07T21:51:30.310460

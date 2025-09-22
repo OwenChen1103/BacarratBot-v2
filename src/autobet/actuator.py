@@ -1,0 +1,58 @@
+# src/autobet/actuator.py
+import time, random, logging, pyautogui
+from typing import Dict, Tuple, List
+
+logger = logging.getLogger(__name__)
+
+class Actuator:
+    def __init__(self, positions: Dict, ui_cfg: Dict, dry_run: bool = True):
+        self.pos = positions or {}
+        self.ui = ui_cfg or {}
+        self.dry = bool(dry_run)
+        pyautogui.FAILSAFE = True
+
+    def _click_point(self, name: str) -> bool:
+        pt = self.pos.get("points", {}).get(name)
+        if not pt:
+            logger.error(f"point missing: {name}")
+            return False
+        x, y = pt["x"], pt["y"]
+        jitter = int(self.ui.get("click", {}).get("jitter_px", 2))
+        rx = x + random.randint(-jitter, jitter)
+        ry = y + random.randint(-jitter, jitter)
+
+        mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
+        ck = self.ui.get("click", {}).get("click_delay_ms", [40, 80])
+        md = random.randint(int(mv[0]), int(mv[1]))/1000.0
+        cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
+
+        if self.dry:
+            logger.info(f"[DRY] click {name} -> ({rx},{ry})")
+            time.sleep(md + cd)
+            return True
+        else:
+            pyautogui.moveTo(rx, ry, duration=md)
+            pyautogui.click()
+            time.sleep(cd)
+            return True
+
+    def click_chip_value(self, value: int) -> bool:
+        name = f"chip_{value//1000}k" if value >= 1000 else f"chip_{value}"
+        # 特殊處理：1000 => chip_1k, 100 => chip_100, 5000 => chip_5k...
+        mapping = {
+            100: "chip_100", 1000: "chip_1k", 5000: "chip_5k",
+            10000: "chip_10k", 50000: "chip_50k"
+        }
+        key = mapping.get(value, name)
+        return self._click_point(key)
+
+    def click_bet(self, target: str) -> bool:
+        return self._click_point(target)
+
+    def confirm(self) -> bool:
+        guard_ms = int(self.ui.get("safety", {}).get("pre_confirm_guard_ms", 120))
+        time.sleep(guard_ms/1000.0)
+        return self._click_point("confirm")
+
+    def cancel(self) -> bool:
+        return self._click_point("cancel")

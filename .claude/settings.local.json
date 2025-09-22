@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(dir:*)",
+      "Bash(timeout 10 python -m src.autobet.run_bot:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -49,7 +49,10 @@ class StatusCard(QFrame):
         # 內容
         self.content_label = QLabel("待機中...")
         self.content_label.setAlignment(Qt.AlignCenter)
-        self.content_label.setFont(QFont("Microsoft YaHei UI", 12, QFont.Bold))
+        # 使用支援 emoji 的字體
+        content_font = QFont("Microsoft YaHei UI", 12, QFont.Bold)
+        content_font.setStyleStrategy(QFont.PreferAntialias)
+        self.content_label.setFont(content_font)
 
         layout.addLayout(header_layout)
         layout.addWidget(self.content_label)
@@ -426,6 +429,10 @@ class DashboardPage(QWidget):
         else:
             self.log_viewer.add_log("ERROR", "Dashboard", "引擎初始化失敗")
 
+        # 設定初始狀態
+        self.mode_card.update_content("🧪 乾跑模式", "#10b981")
+        self.events_card.update_content("● 未連接", "#ef4444")
+
     def start_engine(self):
         """啟動引擎"""
         if not self.engine_worker:
@@ -490,17 +497,19 @@ class DashboardPage(QWidget):
     def on_state_changed(self, state):
         """引擎狀態改變"""
         state_display = {
-            "idle": "🟢 待機",
-            "betting_open": "🟡 下注期",
-            "placing_bets": "🔄 下注中",
-            "in_round": "🔴 局中",
+            "idle": "● 待機",
+            "running": "⚡ 運行中",
+            "betting_open": "● 下注期",
+            "placing_bets": "⚡ 下注中",
+            "in_round": "● 局中",
             "eval_result": "📊 結算中",
-            "error": "❌ 錯誤",
-            "paused": "⏸️ 暫停"
-        }.get(state, f"❓ {state}")
+            "error": "✗ 錯誤",
+            "paused": "⏸ 暫停"
+        }.get(state, f"? {state}")
 
         color = {
             "idle": "#10b981",
+            "running": "#3b82f6",
             "betting_open": "#f59e0b",
             "placing_bets": "#3b82f6",
             "in_round": "#ef4444",
@@ -523,9 +532,12 @@ class DashboardPage(QWidget):
         """引擎狀態更新"""
         # 更新事件來源狀態
         if hasattr(self.engine_worker, 'event_feeder') and self.engine_worker.event_feeder:
-            self.events_card.update_content("🟢 已連接", "#10b981")
+            if hasattr(self.engine_worker.event_feeder, 'is_running') and self.engine_worker.event_feeder.is_running():
+                self.events_card.update_content("● 已連接", "#10b981")
+            else:
+                self.events_card.update_content("● 連接中", "#f59e0b")
         else:
-            self.events_card.update_content("🔴 未連接", "#ef4444")
+            self.events_card.update_content("● 未連接", "#ef4444")
 
     def update_runtime(self):
         """更新運行時間"""

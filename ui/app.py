@@ -2,221 +2,125 @@
 import sys
 import os
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QFont
+from PySide6.QtGui import QFont
 from .main_window import MainWindow
+
+DARK_QSS = """
+QMainWindow { background:#111317; color:#e5e7eb; }
+QWidget { background:#111317; color:#e5e7eb; }
+QStatusBar { background:#0f1115; color:#9ca3af; }
+QToolBar { background:#0f1115; border:0; }
+QListWidget {
+    background:#1f2937;
+    color:#e5e7eb;
+    border:1px solid #374151;
+    border-radius:6px;
+    font-size:10pt;
+}
+QListWidget::item {
+    padding:12px 16px;
+    color:#e5e7eb;
+    border-bottom:1px solid #374151;
+    border-radius:4px;
+    margin:2px;
+}
+QListWidget::item:selected {
+    background:#0e7490;
+    color:#ffffff;
+    font-weight:bold;
+}
+QListWidget::item:hover {
+    background:#374151;
+    color:#ffffff;
+}
+QFrame { color:#e5e7eb; background:#111317; }
+QLabel { color:#e5e7eb; }
+QPushButton {
+    background:#2a2f3a;
+    color:#e5e7eb;
+    border:1px solid #3a3f4a;
+    padding:8px 16px;
+    border-radius:6px;
+    font-weight:bold;
+}
+QPushButton:hover {
+    background:#323846;
+    border-color:#4a5568;
+}
+QPushButton:pressed {
+    background:#1a202c;
+}
+QPushButton[class="success"] {
+    background:#14532d;
+    border-color:#16a34a;
+    color:#ffffff;
+}
+QPushButton[class="success"]:hover {
+    background:#166534;
+    border-color:#22c55e;
+}
+QPushButton[class="danger"] {
+    background:#7f1d1d;
+    border-color:#dc2626;
+    color:#ffffff;
+}
+QPushButton[class="danger"]:hover {
+    background:#991b1b;
+    border-color:#ef4444;
+}
+QPushButton[class="primary"] {
+    background:#0e7490;
+    border-color:#0891b2;
+    color:#ffffff;
+}
+QPushButton[class="primary"]:hover {
+    background:#0891b2;
+    border-color:#06b6d4;
+}
+QComboBox, QCheckBox { color:#e5e7eb; }
+QTableWidget { color:#e5e7eb; background:#1f2937; }
+QTextEdit, QPlainTextEdit {
+    background:#1e1e1e;
+    color:#e5e7eb;
+    border:1px solid #374151;
+    border-radius:4px;
+}
+QLineEdit {
+    background:#2a2f3a;
+    color:#e5e7eb;
+    border:1px solid #3a3f4a;
+    border-radius:4px;
+    padding:6px;
+}
+QGroupBox {
+    color:#e5e7eb;
+    border:2px solid #374151;
+    border-radius:8px;
+    margin-top:6px;
+    padding-top:6px;
+}
+QGroupBox::title {
+    color:#e5e7eb;
+    subcontrol-origin:margin;
+    left:10px;
+    padding:0 5px 0 5px;
+}
+"""
 
 class BaccaratBotApp:
     def __init__(self):
-        self.app = QApplication(sys.argv)
-        self.setup_app()
-        self.main_window = MainWindow()
-
-    def setup_app(self):
-        """設定應用程式屬性"""
-        self.app.setApplicationName("百家樂自動投注機器人")
-        self.app.setApplicationVersion("1.0.0")
-        self.app.setOrganizationName("AutoBet Team")
-
-        # 設定暗色主題
-        self.app.setStyleSheet(self.get_dark_theme())
-
-        # 設定字體
+        self.app = QApplication.instance() or QApplication(sys.argv)
         font = QFont("Microsoft YaHei UI", 9)
         self.app.setFont(font)
-
-    def get_dark_theme(self):
-        """暗色主題樣式"""
-        return """
-        QMainWindow {
-            background-color: #2b2b2b;
-            color: #ffffff;
-        }
-
-        QWidget {
-            background-color: #2b2b2b;
-            color: #ffffff;
-            selection-background-color: #3d8ec9;
-        }
-
-        QPushButton {
-            background-color: #404040;
-            border: 1px solid #555555;
-            padding: 6px 12px;
-            border-radius: 4px;
-            color: #ffffff;
-        }
-
-        QPushButton:hover {
-            background-color: #4a4a4a;
-            border-color: #777777;
-        }
-
-        QPushButton:pressed {
-            background-color: #353535;
-        }
-
-        QPushButton:disabled {
-            background-color: #2a2a2a;
-            color: #666666;
-            border-color: #333333;
-        }
-
-        /* 特殊按鈕樣式 */
-        QPushButton[class="primary"] {
-            background-color: #0e7490;
-            border-color: #0891b2;
-        }
-
-        QPushButton[class="primary"]:hover {
-            background-color: #0891b2;
-        }
-
-        QPushButton[class="danger"] {
-            background-color: #dc2626;
-            border-color: #ef4444;
-        }
-
-        QPushButton[class="danger"]:hover {
-            background-color: #ef4444;
-        }
-
-        QPushButton[class="success"] {
-            background-color: #059669;
-            border-color: #10b981;
-        }
-
-        QPushButton[class="success"]:hover {
-            background-color: #10b981;
-        }
-
-        QListWidget {
-            background-color: #353535;
-            border: 1px solid #555555;
-            border-radius: 4px;
-            outline: none;
-        }
-
-        QListWidget::item {
-            padding: 8px 12px;
-            border-bottom: 1px solid #404040;
-        }
-
-        QListWidget::item:selected {
-            background-color: #0e7490;
-            color: #ffffff;
-        }
-
-        QListWidget::item:hover {
-            background-color: #404040;
-        }
-
-        QTextEdit, QPlainTextEdit {
-            background-color: #1e1e1e;
-            border: 1px solid #555555;
-            border-radius: 4px;
-            padding: 4px;
-            font-family: 'Consolas', 'Monaco', monospace;
-        }
-
-        QLineEdit {
-            background-color: #353535;
-            border: 1px solid #555555;
-            border-radius: 4px;
-            padding: 6px;
-        }
-
-        QLineEdit:focus {
-            border-color: #0891b2;
-        }
-
-        QTabWidget::pane {
-            border: 1px solid #555555;
-            background-color: #2b2b2b;
-        }
-
-        QTabBar::tab {
-            background-color: #404040;
-            color: #ffffff;
-            padding: 8px 16px;
-            margin-right: 2px;
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
-        }
-
-        QTabBar::tab:selected {
-            background-color: #0e7490;
-        }
-
-        QTabBar::tab:hover {
-            background-color: #4a4a4a;
-        }
-
-        QStatusBar {
-            background-color: #353535;
-            border-top: 1px solid #555555;
-            color: #ffffff;
-        }
-
-        QMenuBar {
-            background-color: #353535;
-            border-bottom: 1px solid #555555;
-        }
-
-        QMenuBar::item {
-            background-color: transparent;
-            padding: 6px 12px;
-        }
-
-        QMenuBar::item:selected {
-            background-color: #404040;
-        }
-
-        QMenu {
-            background-color: #353535;
-            border: 1px solid #555555;
-        }
-
-        QMenu::item {
-            padding: 6px 20px;
-        }
-
-        QMenu::item:selected {
-            background-color: #0e7490;
-        }
-
-        QToolBar {
-            background-color: #353535;
-            border-bottom: 1px solid #555555;
-            spacing: 4px;
-        }
-
-        QScrollBar:vertical {
-            background-color: #2b2b2b;
-            width: 12px;
-            border-radius: 6px;
-        }
-
-        QScrollBar::handle:vertical {
-            background-color: #555555;
-            border-radius: 6px;
-            min-height: 20px;
-        }
-
-        QScrollBar::handle:vertical:hover {
-            background-color: #666666;
-        }
-        """
+        self.app.setStyleSheet(DARK_QSS)
+        self.window = MainWindow()
 
     def run(self):
-        """啟動應用程式"""
-        self.main_window.show()
+        self.window.show()
         return self.app.exec()
 
-def main():
-    """主要入口點"""
-    app = BaccaratBotApp()
-    sys.exit(app.run())
+def run():
+    return BaccaratBotApp().run()
 
 if __name__ == "__main__":
-    main()
+    sys.exit(run())

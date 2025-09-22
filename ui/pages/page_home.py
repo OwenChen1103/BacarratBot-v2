@@ -206,115 +206,44 @@ class RecentSessionsCard(QFrame):
                 print(f"載入會話 {filename} 時發生錯誤: {e}")
 
 class HomePage(QWidget):
-    """首頁"""
     navigate_to = Signal(str)
 
     def __init__(self):
         super().__init__()
         self.setup_ui()
-        self.load_status()
+
+    def _card(self, title: str, desc: str, btn_text: str, to_key: str):
+        card = QFrame()
+        card.setFrameStyle(QFrame.StyledPanel)
+        card.setStyleSheet("""
+            QFrame { background:#1f2937; border:1px solid #374151; border-radius:10px; }
+            QLabel[role="title"] { color:#e5e7eb; font-weight:600; }
+            QLabel[role="desc"] { color:#9ca3af; }
+        """)
+        v = QVBoxLayout(card)
+        t = QLabel(title); t.setProperty("role", "title"); t.setFont(QFont("Microsoft YaHei UI", 11))
+        d = QLabel(desc); d.setProperty("role", "desc"); d.setWordWrap(True)
+        b = QPushButton(btn_text)
+        b.clicked.connect(lambda: self.navigate_to.emit(to_key))
+        v.addWidget(t); v.addWidget(d); v.addStretch(); v.addWidget(b, alignment=Qt.AlignRight)
+        return card
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
+        header = QLabel("歡迎使用 AutoBet Bot")
+        header.setFont(QFont("Microsoft YaHei UI", 16, QFont.Bold))
+        header.setAlignment(Qt.AlignLeft)
 
-        # 歡迎訊息
-        welcome_label = QLabel("歡迎使用百家樂自動投注機器人！")
-        welcome_label.setFont(QFont("Microsoft YaHei UI", 16, QFont.Bold))
-        welcome_label.setAlignment(Qt.AlignCenter)
-        welcome_label.setStyleSheet("""
-            QLabel {
-                color: #ffffff;
-                padding: 20px;
-                background-color: #1f2937;
-                border-radius: 12px;
-                border: 2px solid #374151;
-            }
-        """)
-        layout.addWidget(welcome_label)
+        sub = QLabel("建議從左到右依序：模板 → 位置 → 門檻 → 策略 → 主控台（乾跑）")
+        sub.setStyleSheet("color:#9ca3af;")
 
-        # 主要內容區域
-        content_layout = QGridLayout()
+        cards = QHBoxLayout()
+        cards.addWidget(self._card("放置模板", "把 chips/bets/controls 模板放進 templates/ 並檢查品質。", "前往模板管理", "templates"))
+        cards.addWidget(self._card("校準位置", "雙擊捕捉各元素點位，生成 positions.json。", "前往位置校準", "positions"))
+        cards.addWidget(self._card("開始測試", "使用 Demo 事件與乾跑模式，先跑通整條管線。", "前往主控台", "dashboard"))
 
-        # 左上：檔案載入狀態
-        status_group = QGroupBox("📁 配置檔案狀態")
-        status_group.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
-        status_layout = QVBoxLayout(status_group)
-
-        self.positions_card = StatusCard("位置配置", "檢查中...", "📍")
-        self.strategy_card = StatusCard("策略設定", "檢查中...", "⚙️")
-        self.ui_card = StatusCard("UI 配置", "檢查中...", "🎯")
-        self.templates_card = StatusCard("模板資料", "檢查中...", "🖼️")
-
-        status_layout.addWidget(self.positions_card)
-        status_layout.addWidget(self.strategy_card)
-        status_layout.addWidget(self.ui_card)
-        status_layout.addWidget(self.templates_card)
-
-        content_layout.addWidget(status_group, 0, 0)
-
-        # 右上：快速動作
-        self.quick_actions = QuickActionCard()
-        self.quick_actions.action_clicked.connect(self.navigate_to.emit)
-        content_layout.addWidget(self.quick_actions, 0, 1)
-
-        # 下方：最近會話
-        self.recent_sessions = RecentSessionsCard()
-        content_layout.addLayout(QHBoxLayout(), 1, 0, 1, 2)  # 佔據整個下方
-
-        layout.addLayout(content_layout)
-        layout.addWidget(self.recent_sessions)
+        layout.addWidget(header)
+        layout.addWidget(sub)
+        layout.addSpacing(8)
+        layout.addLayout(cards)
         layout.addStretch()
-
-    def load_status(self):
-        """載入各個配置檔案的狀態"""
-        # 檢查 positions.json
-        if os.path.exists("configs/positions.json"):
-            try:
-                with open("configs/positions.json", 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if data.get("points"):
-                        self.positions_card.update_status("已載入")
-                    else:
-                        self.positions_card.update_status("空白檔案")
-            except:
-                self.positions_card.update_status("格式錯誤")
-        else:
-            self.positions_card.update_status("未載入")
-
-        # 檢查 strategy.json
-        if os.path.exists("configs/strategy.json"):
-            try:
-                with open("configs/strategy.json", 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if data.get("unit"):
-                        self.strategy_card.update_status("已載入")
-                    else:
-                        self.strategy_card.update_status("空白檔案")
-            except:
-                self.strategy_card.update_status("格式錯誤")
-        else:
-            self.strategy_card.update_status("未載入")
-
-        # 檢查 ui.yaml
-        if os.path.exists("configs/ui.yaml"):
-            self.ui_card.update_status("已載入")
-        else:
-            self.ui_card.update_status("未載入")
-
-        # 檢查模板目錄
-        templates_dir = "templates"
-        if os.path.exists(templates_dir):
-            template_count = len([f for f in os.listdir(templates_dir)
-                                if f.endswith(('.png', '.jpg', '.jpeg'))])
-            if template_count > 0:
-                self.templates_card.update_status(f"已載入 ({template_count} 個)")
-            else:
-                self.templates_card.update_status("空白目錄")
-        else:
-            self.templates_card.update_status("未載入")
-
-    def refresh_status(self):
-        """重新整理狀態"""
-        self.load_status()
-        self.recent_sessions.load_recent_sessions()

@@ -1030,7 +1030,7 @@ class OverlayPage(QWidget):
             config = {
                 "open_threshold": 0.60,  # NCC_請 閾值
                 "close_threshold": 0.45,  # 關閉閾值
-                "k_open": 3,  # 開啟需要連續3幀
+                "k_open": 2,  # 開啟需要連續2幀
                 "k_close": 2,  # 關閉需要連續2幀
                 "green_hue_range": [95, 150],  # GREEN 色彩護欄
                 "green_sat_min": 0.45,

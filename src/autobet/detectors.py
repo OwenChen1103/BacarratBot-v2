@@ -48,7 +48,18 @@ class OverlayDetector:
         else:
             self._streak = 1
             self._last_state = cur
-        return cur and self._streak >= self._need
+        
+        result = cur and self._streak >= self._need
+        
+        # 添加調試日誌（每50次檢測記錄一次，避免日誌過多）
+        if not hasattr(self, '_debug_counter'):
+            self._debug_counter = 0
+        self._debug_counter += 1
+        
+        if self._debug_counter % 50 == 0:  # 每50次記錄一次
+            logger.info(f"Overlay檢測: mean={mean:.1f}, threshold={open_lt}, cur={cur}, streak={self._streak}/{self._need}, result={result}")
+        
+        return result
 
 
 class OverlayPhase(str, Enum):
@@ -786,12 +797,12 @@ class OverlayDetectorWrapper:
         self.ui = ui_cfg or {}
         self.pos = positions or {}
 
-        # 1) 安全預設值 (與 ProductionOverlayDetector 預設值一致)
+        # 1) 安全預設值 (優化為更快響應)
         defaults = {
             "open_threshold": 0.70,
             "close_threshold": 0.45,
-            "k_open": 5,
-            "k_close": 3,
+            "k_open": 2,    # 從5降到2，加快可下注檢測
+            "k_close": 2,   # 從3降到2，保持一致性
             "green_hue_range": [90, 150],  # 與 ProductionOverlayDetector 一致
             "green_sat_min": 0.45,
             "green_val_min": 0.55,
@@ -844,8 +855,11 @@ class OverlayDetectorWrapper:
             self.detector.load_qing_template(qing_path)
 
         # 啟動檢測（模擬舊版行為）
-        self._last_frame_time = 0
-        self._frame_interval = 0.12  # 120ms
+        from time import monotonic
+        self._last_frame_time = 0.0
+        # 使用與EngineWorker相容的節拍，避免雙重節流
+        frame_interval_ms = ui_overlay.get("timer_interval_ms", 150)  # 調整為150ms，減少檢測頻率
+        self._frame_interval = frame_interval_ms / 1000.0
 
     def _clamp_roi(self, roi):
         """夾住ROI到螢幕邊界內"""
@@ -878,13 +892,16 @@ class OverlayDetectorWrapper:
     def overlay_is_open(self) -> bool:
         """引擎調用的主要接口"""
         try:
-            current_time = time.time()
+            from time import monotonic, perf_counter
+            t0 = perf_counter()
+
+            current_time = monotonic()
 
             # 控制檢測頻率（避免過度頻繁）
             if current_time - self._last_frame_time < self._frame_interval:
                 # 太頻繁，直接返回上次狀態
                 try:
-                    result = self.detector.overlay_is_open()
+                    result = getattr(self, '_last_decision', False)
                     return result
                 except Exception as e:
                     logger.warning(f"Detector overlay_is_open failed: {e}")
@@ -923,9 +940,15 @@ class OverlayDetectorWrapper:
             result = self.detector.process_frame(full_frame)
 
             is_open = result.get("is_open", False)
+            self._last_decision = is_open  # 儲存決策供下次快取使用
 
             # 釋放記憶體
             del full_frame, full_arr, shot, arr
+
+            # 延遲量測日誌
+            wrapper_ms = (perf_counter() - t0) * 1000
+            if wrapper_ms > 50:  # 只記錄較慢的檢測
+                logger.debug(f"wrapper_ms={wrapper_ms:.1f}")
 
             return is_open
 

@@ -8,24 +8,24 @@
   },
   "points": {
     "banker": {
-      "x": 534,
-      "y": 564
+      "x": 536,
+      "y": 749
     },
     "chip_1k": {
-      "x": 840,
-      "y": 816
+      "x": 156,
+      "y": 847
     },
     "confirm": {
-      "x": 1242,
-      "y": 822
+      "x": 533,
+      "y": 847
     }
   },
   "roi": {
     "overlay": {
-      "x": 233,
-      "y": 547,
+      "x": 315,
+      "y": 501,
       "w": 117,
-      "h": 30
+      "h": 33
     },
     "player_stack": {
       "x": 720,
@@ -56,13 +56,13 @@
     "min_click_gap_ms": 40
   },
   "meta": {
-    "last_updated": "2025-09-28T07:07:55Z",
+    "last_updated": "2025-09-28T14:21:38Z",
     "total_keys": 3,
     "test_mode": "move",
     "test_delay_ms": 2000
   },
   "overlay_params": {
-    "consecutive_required": 3,
+    "consecutive_required": 2,
     "ncc_threshold": 0.7,
     "flicker_threshold": 0.06,
     "timer_white_range": [

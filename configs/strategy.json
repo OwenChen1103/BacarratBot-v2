@@ -1,6 +1,14 @@
 {
-    "unit": 100,
-    "target": "P",
+    "unit": 1000,
+    "targets": ["banker"],
+    "split_units": {
+        "banker": 1
+    },
+    "limits": {
+        "per_round_cap": 10000,
+        "session_cap": 50000,
+        "max_consecutive_losses": 5
+    },
     "martingale": {
         "enabled": true,
         "max_level": 7,

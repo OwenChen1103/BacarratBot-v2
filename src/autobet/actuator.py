@@ -5,10 +5,11 @@ from typing import Dict, Tuple, List
 logger = logging.getLogger(__name__)
 
 class Actuator:
-    def __init__(self, positions: Dict, ui_cfg: Dict, dry_run: bool = True):
+    def __init__(self, positions: Dict, ui_cfg: Dict, dry_run: bool = True, log_callback=None):
         self.pos = positions or {}
         self.ui = ui_cfg or {}
         self.dry = bool(dry_run)
+        self.log_callback = log_callback  # 用於發送日誌到 UI
         pyautogui.FAILSAFE = True
 
     def _click_point(self, name: str) -> bool:
@@ -23,15 +24,28 @@ class Actuator:
 
         mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
         ck = self.ui.get("click", {}).get("click_delay_ms", [40, 80])
-        md = random.randint(int(mv[0]), int(mv[1]))/1000.0
-        cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
+
+        # 乾跑模式使用極短延遲，避免卡住UI
+        if self.dry:
+            md = 0.02  # 20ms duration，避免過快但不阻塞
+            cd = 0.02  # 20ms click delay
+        else:
+            md = random.randint(int(mv[0]), int(mv[1]))/1000.0
+            cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
 
         if self.dry:
-            logger.info(f"[SIMULATION] move to {name} -> ({rx},{ry}) [NO CLICK]")
-            pyautogui.moveTo(rx, ry, duration=md)  # 模擬時移動滑鼠但不點擊
+            log_msg = f"移動滑鼠到 {name} -> ({rx},{ry}) [不點擊]"
+            logger.info(log_msg)
+            if self.log_callback:
+                self.log_callback("INFO", "Actuator", log_msg)
+            pyautogui.moveTo(rx, ry, duration=md)  # 乾跑使用快速移動
             time.sleep(cd)
             return True
         else:
+            log_msg = f"移動滑鼠到 {name} -> ({rx},{ry}) 並點擊"
+            logger.info(log_msg)
+            if self.log_callback:
+                self.log_callback("INFO", "Actuator", log_msg)
             pyautogui.moveTo(rx, ry, duration=md)
             pyautogui.click()
             time.sleep(cd)
@@ -68,7 +82,10 @@ class Actuator:
         cd = random.randint(int(mv[0]), int(mv[1]))/1000.0
 
         label_text = f" ({label})" if label else ""
-        logger.info(f"[DRY] click{label_text} -> ({rx},{ry})")
+        log_msg = f"移動滑鼠到{label_text} -> ({rx},{ry})"
+        logger.info(f"[測試] {log_msg}")
+        if self.log_callback:
+            self.log_callback("INFO", "Actuator", log_msg)
         time.sleep(cd)  # 模擬點擊延遲
         return True
 
@@ -90,7 +107,10 @@ class Actuator:
         md = random.randint(int(mv[0]), int(mv[1]))/1000.0
 
         if self.dry:
-            logger.info(f"[MOVE-ONLY] ({rx},{ry})")
+            log_msg = f"移動滑鼠到 ({rx},{ry})"
+            logger.info(f"[僅移動] {log_msg}")
+            if self.log_callback:
+                self.log_callback("INFO", "Actuator", log_msg)
             time.sleep(md)
             return True
         else:

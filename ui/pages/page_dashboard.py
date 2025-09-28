@@ -72,11 +72,22 @@ class StatusCard(QFrame):
         content_layout.setContentsMargins(0, 0, 0, 0)
 
         self.content_label = QLabel("待機中...")
-        self.content_label.setAlignment(Qt.AlignCenter)
-        # 使用支援 emoji 的字體
-        content_font = QFont("Microsoft YaHei UI", 12, QFont.Bold)
+        # 檢測卡片使用左對齊以便顯示詳細信息，其他卡片居中
+        if self.is_detection_card:
+            self.content_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        else:
+            self.content_label.setAlignment(Qt.AlignCenter)
+
+        # 使用支援 emoji 的字體，檢測卡片使用較小字體
+        if self.is_detection_card:
+            content_font = QFont("Microsoft YaHei UI", 9, QFont.Normal)
+        else:
+            content_font = QFont("Microsoft YaHei UI", 12, QFont.Bold)
         content_font.setStyleStrategy(QFont.PreferAntialias)
         self.content_label.setFont(content_font)
+
+        # 允許換行顯示
+        self.content_label.setWordWrap(True)
 
         content_layout.addWidget(self.content_label)
 
@@ -139,7 +150,7 @@ class LogViewer(QFrame):
 
         self.level_filter = QComboBox()
         self.level_filter.addItems(["全部", "DEBUG", "INFO", "WARNING", "ERROR"])
-        self.level_filter.setCurrentText("INFO")
+        self.level_filter.setCurrentText("全部")
 
         self.module_filter = QComboBox()
         self.module_filter.addItems(["全部", "Engine", "Events", "Config", "Actuator"])
@@ -598,8 +609,17 @@ class DashboardPage(QWidget):
         super().__init__()
         self.engine_worker = None
         self.start_time = None
+
+        # 直接檢測相關屬性
+        self.detector = None
+        self.detection_timer = QTimer()
+        self.detection_active = False
+        self.last_decision = None  # 記錄上次決策，防重複觸發
+        self.is_triggering = False  # 防止重複觸發標志
+
         self.setup_ui()
         self.setup_engine()
+        self.setup_direct_detection()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -731,9 +751,28 @@ class DashboardPage(QWidget):
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.stop_engine)
 
+        # 測試按鈕
+        self.test_btn = QPushButton("測試順序")
+        self.test_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #7c3aed;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #6d28d9;
+            }
+        """)
+        self.test_btn.clicked.connect(self.test_sequence)
+
         button_layout.addWidget(self.simulate_btn)
         button_layout.addWidget(self.start_btn)
         button_layout.addWidget(self.stop_btn)
+        button_layout.addWidget(self.test_btn)
         button_layout.addStretch()
 
         control_layout.addLayout(button_layout, 1, 0, 1, 3)
@@ -765,7 +804,11 @@ class DashboardPage(QWidget):
 
         # 設定初始狀態
         self.mode_card.update_content("⏸ 待機中", "#6b7280")
-        self.detection_card.update_content("● 等待啟動", "#6b7280", False)
+        initial_detection_info = (
+            "NCC: -- | 綠色: --\n"
+            "計數: --/--"
+        )
+        self.detection_card.update_content(f"⚪ 等待啟動\n{initial_detection_info}", "#6b7280", False)
 
         # 載入 positions 數據
         self.load_positions_data()
@@ -794,6 +837,9 @@ class DashboardPage(QWidget):
             self.runtime_timer = QTimer()
             self.runtime_timer.timeout.connect(self.update_runtime)
             self.runtime_timer.start(1000)
+
+            # 啟動直接檢測
+            self.start_direct_detection()
 
             self.log_viewer.add_log("INFO", "Dashboard", "🎯 模擬實戰模式已啟動 - 將移動滑鼠但不實際點擊")
 
@@ -837,6 +883,9 @@ class DashboardPage(QWidget):
             self.runtime_timer.timeout.connect(self.update_runtime)
             self.runtime_timer.start(1000)
 
+            # 啟動直接檢測
+            self.start_direct_detection()
+
             self.log_viewer.add_log("WARNING", "Dashboard", "⚡ 實戰模式已啟動 - 將執行真實點擊操作")
 
     def _check_config_ready(self):
@@ -871,6 +920,9 @@ class DashboardPage(QWidget):
 
     def stop_engine(self):
         """停止引擎"""
+        # 停止直接檢測
+        self.stop_direct_detection()
+
         if self.engine_worker:
             self.engine_worker.stop_engine()
 
@@ -881,7 +933,11 @@ class DashboardPage(QWidget):
 
         # 重置模式顯示
         self.mode_card.update_content("⏸ 已停止", "#6b7280")
-        self.detection_card.update_content("● 已停止", "#6b7280", False)
+        stopped_detection_info = (
+            "NCC: -- | 綠色: --\n"
+            "計數: --/--"
+        )
+        self.detection_card.update_content(f"⚫ 已停止\n{stopped_detection_info}", "#6b7280", False)
 
         if hasattr(self, 'runtime_timer'):
             self.runtime_timer.stop()
@@ -924,32 +980,9 @@ class DashboardPage(QWidget):
 
     def on_engine_status(self, status):
         """引擎狀態更新"""
-        # 更新檢測狀態（基於引擎狀態）
-        current_state = status.get("current_state", "idle")
-        enabled = status.get("enabled", False)
-        detection_state = status.get("detection_state", "waiting")  # 新增檢測狀態
-        detection_error = status.get("detection_error")  # 檢測錯誤信息
-
-        if not enabled:
-            self.detection_card.update_content("● 未啟動", "#6b7280", False)
-        elif detection_state == "betting_open":
-            self.detection_card.update_content("可下注", "#10b981", True)
-        elif detection_state == "betting_closed":
-            self.detection_card.update_content("停止下注", "#ef4444", False)
-        elif detection_state == "waiting":
-            if detection_error:
-                # 顯示具體錯誤信息
-                error_short = str(detection_error)[:50] + "..." if len(str(detection_error)) > 50 else str(detection_error)
-                # 特殊處理 ROI 相關錯誤
-                if "ROI" in str(detection_error) or "overlay" in str(detection_error).lower():
-                    self.detection_card.update_content(f"請設定 ROI\n{error_short}", "#f59e0b", False)
-                else:
-                    self.detection_card.update_content(f"檢測錯誤\n{error_short}", "#ef4444", False)
-            else:
-                self.detection_card.update_content("等待檢測", "#6b7280", False)
-        else:
-            # 未知狀態，顯示當前狀態
-            self.detection_card.update_content(f"? {detection_state}", "#6b7280", False)
+        # 現在使用直接檢測，不再從 EngineWorker 更新檢測狀態
+        # 只保留其他狀態更新（統計等）
+        pass
 
     def load_positions_data(self):
         """載入 positions 配置數據"""
@@ -984,8 +1017,196 @@ class DashboardPage(QWidget):
         import time
         return int(time.time())
 
+    def test_sequence(self):
+        """測試點擊順序"""
+        if not self.engine_worker:
+            self.log_viewer.add_log("ERROR", "Dashboard", "引擎未初始化")
+            return
+
+        # 檢查是否正在觸發過程中
+        if self.is_triggering:
+            self.log_viewer.add_log("WARNING", "Dashboard", "⚠️ 系統正在執行點擊序列，請稍後再試")
+            return
+
+        # 檢查是否在檢測模式中
+        if self.detection_active:
+            self.log_viewer.add_log("WARNING", "Dashboard", "⚠️ 請先停止檢測模式再進行測試")
+            return
+
+        # 設置測試標志，防止檢測系統干擾
+        self.is_triggering = True
+        self.log_viewer.add_log("INFO", "Dashboard", "🧪 開始測試點擊順序...")
+
+        try:
+            self.engine_worker.force_test_sequence()
+        except Exception as e:
+            self.log_viewer.add_log("ERROR", "Dashboard", f"測試失敗: {e}")
+        finally:
+            # 3秒後重置標志（測試序列較短）
+            QTimer.singleShot(3000, self._reset_triggering_flag)
+
+    def setup_direct_detection(self):
+        """設定直接檢測（類似 Overlay Page）"""
+        self.detection_timer.timeout.connect(self.process_detection_frame)
+        self.detection_timer.setInterval(120)  # 120ms，與 Overlay Page 一致
+
+        # 初始化檢測器
+        self.create_direct_detector()
+
+    def create_direct_detector(self):
+        """創建直接檢測器"""
+        try:
+            from src.autobet.detectors import ProductionOverlayDetector
+
+            # 載入位置配置
+            positions_file = "configs/positions.json"
+            if not os.path.exists(positions_file):
+                return False
+
+            with open(positions_file, 'r', encoding='utf-8') as f:
+                positions = json.load(f)
+
+            # 檢測器配置
+            config = {
+                "open_threshold": 0.55,  # 降低NCC閾值，提高敏感度
+                "close_threshold": 0.45,
+                "k_open": 3,  # 調整為3幀，平衡穩定性和響應速度
+                "k_close": 2,
+                "green_hue_range": [90, 150],
+                "green_sat_min": 0.45,
+                "green_val_min": 0.55,
+                "max_open_wait_ms": 8000,
+                "cancel_on_close": True
+            }
+
+            self.detector = ProductionOverlayDetector(config)
+
+            # 設定 ROI
+            overlay_roi = positions.get("roi", {}).get("overlay")
+            timer_roi = positions.get("roi", {}).get("timer")
+
+            if overlay_roi and timer_roi:
+                self.detector.set_rois(overlay_roi, timer_roi)
+
+            # 載入模板
+            template_path = positions.get("overlay_params", {}).get("template_paths", {}).get("qing")
+            if template_path and os.path.exists(template_path):
+                self.detector.load_qing_template(template_path)
+
+            return True
+
+        except Exception as e:
+            self.log_viewer.add_log("ERROR", "Detection", f"檢測器初始化失敗: {e}")
+            return False
+
+    def process_detection_frame(self):
+        """處理檢測幀（直接檢測）"""
+        if not self.detector:
+            return
+
+        try:
+            # 截取畫面並檢測
+            import pyautogui
+            from PIL import Image
+            import numpy as np
+
+            screenshot = pyautogui.screenshot()
+            frame = np.array(screenshot)
+            frame = frame[:, :, ::-1]  # RGB -> BGR
+
+            # 執行檢測
+            result = self.detector.process_frame(frame)
+
+            # 提取關鍵檢測數據
+            decision = result.get('decision', 'UNKNOWN')
+            ncc_qing = result.get('ncc_qing', 0.0)
+            hue = result.get('hue', 0.0)
+            sat = result.get('sat', 0.0)
+            in_green_gate = result.get('in_green_gate', False)
+            open_counter = result.get('open_counter', '0/2')
+            close_counter = result.get('close_counter', '0/2')
+            reason = result.get('reason', '未知原因')
+
+            # 格式化檢測詳情（精簡版）
+            details = (
+                f"NCC: {ncc_qing:.3f} | 綠色: {'✓' if in_green_gate else '✗'}\n"
+                f"計數: {open_counter}/{close_counter}"
+            )
+
+            # 根據檢測結果更新狀態
+            if decision == 'OPEN':
+                self.detection_card.update_content(f"🟢 可下注\n{details}", "#10b981", True)
+                # 防重複觸發：只在狀態從非OPEN變為OPEN時觸發，且當前未在觸發過程中
+                if (hasattr(self, 'engine_worker') and self.engine_worker and self.detection_active and
+                    self.last_decision != 'OPEN' and not self.is_triggering):
+                    self.trigger_click_sequence()
+            elif decision == 'CLOSED':
+                self.detection_card.update_content(f"🔴 停止下注\n{details}", "#ef4444", False)
+            else:
+                self.detection_card.update_content(f"🟡 檢測中\n{details}", "#f59e0b", False)
+
+            # 記錄當前決策
+            self.last_decision = decision
+
+            # 添加詳細調試日誌（當綠色護欄通過但未檢測到OPEN時）
+            if in_green_gate and decision != 'OPEN':
+                debug_msg = f"綠色護欄✓但未OPEN: NCC={ncc_qing:.3f} (需要≥{self.detector.open_th:.2f}), 計數={open_counter}"
+                self.log_viewer.add_log("DEBUG", "Detection", debug_msg)
+
+        except Exception as e:
+            self.log_viewer.add_log("ERROR", "Detection", f"檢測錯誤: {e}")
+            self.detection_card.update_content(f"❌ 檢測錯誤\n{str(e)}", "#ef4444", False)
+
+    def trigger_click_sequence(self):
+        """觸發點擊序列（當檢測到可下注時）"""
+        if self.is_triggering:
+            return  # 如果已經在觸發過程中，直接返回
+
+        self.is_triggering = True  # 設置觸發標志
+        self.log_viewer.add_log("INFO", "Engine", "🎯 檢測到可下注")
+
+        # 使用QTimer.singleShot延遲1秒後執行
+        QTimer.singleShot(1000, self._execute_delayed_click_sequence)
+
+    def _execute_delayed_click_sequence(self):
+        """延遲執行點擊序列"""
+        try:
+            if self.engine_worker and self.engine_worker.engine:
+                self.log_viewer.add_log("INFO", "Engine", "✅ 開始執行點擊序列")
+                triggered = self.engine_worker.engine.trigger_if_open()
+                if not triggered:
+                    self.log_viewer.add_log("WARNING", "Engine", "⚠️ 點擊序列執行失敗")
+        except Exception as e:
+            self.log_viewer.add_log("ERROR", "Engine", f"觸發點擊序列錯誤: {e}")
+        finally:
+            # 重置觸發標志（5秒後重置，確保序列執行完成）
+            QTimer.singleShot(5000, self._reset_triggering_flag)
+
+    def _reset_triggering_flag(self):
+        """重置觸發標志"""
+        self.is_triggering = False
+        self.log_viewer.add_log("DEBUG", "Engine", "觸發標志已重置")
+
+    def start_direct_detection(self):
+        """開始直接檢測"""
+        if self.detector:
+            self.detection_active = True
+            self.detection_timer.start()
+            self.log_viewer.add_log("INFO", "Detection", "🎯 開始直接檢測")
+
+    def stop_direct_detection(self):
+        """停止直接檢測"""
+        self.detection_active = False
+        self.detection_timer.stop()
+        self.is_triggering = False  # 重置觸發標志
+        self.last_decision = None  # 重置決策記錄
+        self.log_viewer.add_log("INFO", "Detection", "⏸️ 停止直接檢測")
+
     def closeEvent(self, event):
         """頁面關閉事件"""
+        # 停止直接檢測
+        self.stop_direct_detection()
+
         if self.engine_worker:
             self.engine_worker.stop_engine()
             self.engine_worker.quit()

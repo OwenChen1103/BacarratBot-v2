@@ -379,30 +379,74 @@ class DashboardPage(QWidget):
         # 控制按鈕
         button_layout = QHBoxLayout()
 
-        self.start_btn = QPushButton("🚀 啟動引擎")
-        self.start_btn.setProperty("class", "success")
-        self.start_btn.clicked.connect(self.start_engine)
+        # 模擬實戰按鈕
+        self.simulate_btn = QPushButton("🎯 模擬實戰")
+        self.simulate_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0284c7;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #0369a1;
+            }
+            QPushButton:disabled {
+                background-color: #6b7280;
+            }
+        """)
+        self.simulate_btn.clicked.connect(self.start_simulation)
 
-        self.stop_btn = QPushButton("🛑 停止引擎")
-        self.stop_btn.setProperty("class", "danger")
+        # 開始實戰按鈕
+        self.start_btn = QPushButton("⚡ 開始實戰")
+        self.start_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #dc2626;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #b91c1c;
+            }
+            QPushButton:disabled {
+                background-color: #6b7280;
+            }
+        """)
+        self.start_btn.clicked.connect(self.start_real_battle)
+
+        # 停止按鈕
+        self.stop_btn = QPushButton("🛑 停止")
+        self.stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #374151;
+                color: white;
+                border: 1px solid #6b7280;
+                padding: 12px 24px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #4b5563;
+            }
+            QPushButton:disabled {
+                background-color: #1f2937;
+                color: #6b7280;
+            }
+        """)
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.stop_engine)
 
-        self.dryrun_toggle = QCheckBox("乾跑模式")
-        self.dryrun_toggle.setChecked(True)
-        self.dryrun_toggle.toggled.connect(self.toggle_dry_run)
-
-        # 事件來源選擇
-        self.event_source = QComboBox()
-        self.event_source.addItems(["demo", "ndjson"])
-        self.event_source.setCurrentText("demo")
-
+        button_layout.addWidget(self.simulate_btn)
         button_layout.addWidget(self.start_btn)
         button_layout.addWidget(self.stop_btn)
-        button_layout.addWidget(QLabel("|"))
-        button_layout.addWidget(self.dryrun_toggle)
-        button_layout.addWidget(QLabel("事件來源:"))
-        button_layout.addWidget(self.event_source)
         button_layout.addStretch()
 
         control_layout.addLayout(button_layout, 1, 0, 1, 3)
@@ -422,77 +466,122 @@ class DashboardPage(QWidget):
         # 啟動工作執行緒
         self.engine_worker.start()
 
-        # 初始化引擎
-        success = self.engine_worker.initialize_engine(dry_run=True)
+        # 初始化引擎（等啟動時再設定模式）
+        success = self.engine_worker.initialize_engine()
         if success:
             self.log_viewer.add_log("INFO", "Dashboard", "引擎工作執行緒已準備就緒")
         else:
             self.log_viewer.add_log("ERROR", "Dashboard", "引擎初始化失敗")
 
         # 設定初始狀態
-        self.mode_card.update_content("🧪 乾跑模式", "#10b981")
-        self.events_card.update_content("● 未連接", "#ef4444")
+        self.mode_card.update_content("⏸ 待機中", "#6b7280")
+        self.events_card.update_content("🎯 Overlay 檢測", "#10b981")
 
-    def start_engine(self):
-        """啟動引擎"""
+    def start_simulation(self):
+        """啟動模擬實戰模式"""
         if not self.engine_worker:
             return
 
-        # 獲取事件來源設定
-        source = self.event_source.currentText()
+        # 檢查配置完整性
+        if not self._check_config_ready():
+            return
 
-        kwargs = {}
-        if source == "demo":
-            kwargs = {"interval": 15, "seed": 42}
-        elif source == "ndjson":
-            kwargs = {"file_path": "data/sessions/events.sample.ndjson", "interval": 1.2}
-
-        # 如果不是乾跑模式，需要確認
-        if not self.dryrun_toggle.isChecked():
-            reply = QMessageBox.question(
-                self, "確認實戰模式",
-                "您即將啟動實戰模式！\n這將執行真實的滑鼠點擊操作。\n\n確定要繼續嗎？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
-
-        # 啟動引擎
-        success = self.engine_worker.start_engine(source, **kwargs)
+        # 啟動模擬模式
+        success = self.engine_worker.start_engine(mode="simulation")
 
         if success:
+            self.simulate_btn.setEnabled(False)
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
-            self.event_source.setEnabled(False)
+            self.mode_card.update_content("🎯 模擬實戰中", "#0284c7")
             self.start_time = self.get_current_time()
 
             # 啟動運行時間計時器
             self.runtime_timer = QTimer()
             self.runtime_timer.timeout.connect(self.update_runtime)
-            self.runtime_timer.start(1000)  # 每秒更新
+            self.runtime_timer.start(1000)
+
+            self.log_viewer.add_log("INFO", "Dashboard", "🎯 模擬實戰模式已啟動 - 將移動滑鼠但不實際點擊")
+
+    def start_real_battle(self):
+        """啟動真實實戰模式"""
+        if not self.engine_worker:
+            return
+
+        # 檢查配置完整性
+        if not self._check_config_ready():
+            return
+
+        # 確認對話框
+        reply = QMessageBox.question(
+            self, "確認實戰模式",
+            "⚠️ 您即將啟動實戰模式！\n\n" +
+            "系統將會：\n" +
+            "• 檢測遊戲畫面的「請下注」狀態\n" +
+            "• 根據策略自動移動滑鼠並點擊\n" +
+            "• 執行真實的下注操作\n\n" +
+            "確定要繼續嗎？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # 啟動實戰模式
+        success = self.engine_worker.start_engine(mode="real")
+
+        if success:
+            self.simulate_btn.setEnabled(False)
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+            self.mode_card.update_content("⚡ 實戰進行中", "#dc2626")
+            self.start_time = self.get_current_time()
+
+            # 啟動運行時間計時器
+            self.runtime_timer = QTimer()
+            self.runtime_timer.timeout.connect(self.update_runtime)
+            self.runtime_timer.start(1000)
+
+            self.log_viewer.add_log("WARNING", "Dashboard", "⚡ 實戰模式已啟動 - 將執行真實點擊操作")
+
+    def _check_config_ready(self):
+        """檢查配置是否就緒"""
+        import os
+
+        # 檢查 positions.json
+        if not os.path.exists("configs/positions.json"):
+            QMessageBox.warning(self, "配置缺失", "未找到 positions.json\n請先完成位置校準！")
+            return False
+
+        # 檢查 strategy.json
+        if not os.path.exists("configs/strategy.json"):
+            QMessageBox.warning(self, "配置缺失", "未找到 strategy.json\n請先完成策略設定！")
+            return False
+
+        # 檢查模板
+        if not os.path.exists("templates") or not any(f.endswith('.png') for f in os.listdir("templates")):
+            QMessageBox.warning(self, "配置缺失", "未找到模板文件\n請先設定檢測模板！")
+            return False
+
+        return True
 
     def stop_engine(self):
         """停止引擎"""
         if self.engine_worker:
             self.engine_worker.stop_engine()
 
+        # 重置按鈕狀態
+        self.simulate_btn.setEnabled(True)
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.event_source.setEnabled(True)
+
+        # 重置模式顯示
+        self.mode_card.update_content("⏸ 已停止", "#6b7280")
 
         if hasattr(self, 'runtime_timer'):
             self.runtime_timer.stop()
 
-    def toggle_dry_run(self, checked):
-        """切換乾跑模式"""
-        if self.engine_worker:
-            self.engine_worker.set_dry_run(checked)
-
-        # 更新模式顯示
-        mode = "🧪 乾跑模式" if checked else "⚡ 實戰模式"
-        color = "#10b981" if checked else "#ef4444"
-        self.mode_card.update_content(mode, color)
+        self.log_viewer.add_log("INFO", "Dashboard", "🛑 引擎已停止")
 
     def on_state_changed(self, state):
         """引擎狀態改變"""

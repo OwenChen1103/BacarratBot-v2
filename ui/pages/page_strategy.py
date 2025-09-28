@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QValidator
 
+from ..app_state import APP_STATE, emit_toast
+
 class StrategyPage(QWidget):
     """策略設定頁面"""
     strategy_changed = Signal(dict)  # 策略變更信號
@@ -590,6 +592,16 @@ class StrategyPage(QWidget):
         try:
             with open("configs/strategy.json", 'w', encoding='utf-8') as f:
                 json.dump(self.strategy_data, f, indent=4, ensure_ascii=False)
+
+            # 發送狀態更新事件
+            APP_STATE.strategyChanged.emit({
+                'complete': True,
+                'target': self.strategy_data.get('target', ''),
+                'unit': self.strategy_data.get('unit', 0)
+            })
+
+            # 發送 Toast 通知
+            emit_toast("Strategy saved successfully", "success")
 
             QMessageBox.information(self, "成功", "策略已儲存到 configs/strategy.json")
             self.strategy_changed.emit(self.strategy_data)

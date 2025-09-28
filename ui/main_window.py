@@ -17,6 +17,8 @@ from .pages.page_events import EventsPage
 from .pages.page_dashboard import DashboardPage
 from .pages.page_sessions import SessionsPage
 from .pages.page_settings import SettingsPage
+from .app_state import APP_STATE
+from .components.toast import show_toast
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -53,7 +55,7 @@ class MainWindow(QMainWindow):
 
         self.add_page("templates", TemplatesPage(), "🖼️ 模板管理")
         self.add_page("positions", PositionsPage(), "📍 位置校準")
-        self.add_page("overlay", OverlayPage(), "🎯 UI 門檻")
+        self.add_page("overlay", OverlayPage(), "🎯 可下注判斷")
         self.add_page("strategy", StrategyPage(), "⚙️ 策略設定")
 
         dashboard_page = DashboardPage()
@@ -68,6 +70,12 @@ class MainWindow(QMainWindow):
 
         # 選單（最少可用）
         self._build_menu()
+
+        # 連接全域事件
+        self._connect_app_state()
+
+        # 初始化時檢查現有配置狀態
+        self._check_initial_state()
 
     def _build_menu(self):
         menubar = self.menuBar()
@@ -90,3 +98,79 @@ class MainWindow(QMainWindow):
         if key in self.pages:
             self.stack.setCurrentWidget(self.pages[key])
             self.nav.setCurrentRow(keys.index(key))
+
+    def _connect_app_state(self):
+        """連接應用狀態事件"""
+        APP_STATE.toastRequested.connect(self._show_toast)
+        APP_STATE.bannerRequested.connect(self._show_banner)
+
+    def _show_toast(self, data):
+        """顯示 Toast 訊息"""
+        message = data.get('message', '')
+        toast_type = data.get('type', 'success')
+        duration = data.get('duration', 2200)
+        show_toast(self, message, toast_type, duration)
+
+    def _show_banner(self, data):
+        """顯示 Banner 訊息"""
+        # TODO: 實作 Banner 組件
+        message = data.get('message', '')
+        banner_type = data.get('type', 'error')
+        print(f"Banner ({banner_type}): {message}")  # 暫時用 print
+
+    def _check_initial_state(self):
+        """檢查並發送初始配置狀態"""
+        import os
+        import json
+
+        # 檢查 positions.json
+        if os.path.exists("configs/positions.json"):
+            try:
+                with open("configs/positions.json", "r", encoding="utf-8") as f:
+                    pos_data = json.load(f)
+
+                # 發送 positions 狀態
+                point_count = len(pos_data.get("points", {}))
+                required_keys = ["banker", "chip_1k", "confirm"]
+                APP_STATE.positionsChanged.emit({
+                    'complete': point_count >= len(required_keys),
+                    'count': point_count,
+                    'required': required_keys
+                })
+
+                # 發送 overlay 狀態
+                roi_data = pos_data.get("roi", {})
+                params = pos_data.get("overlay_params", {})
+                has_roi = bool(roi_data.get("overlay") and roi_data.get("timer"))
+                threshold = params.get("ncc_threshold", 0)
+                APP_STATE.overlayChanged.emit({
+                    'has_roi': has_roi,
+                    'threshold': threshold,
+                    'ready': has_roi and threshold > 0
+                })
+            except:
+                pass
+
+        # 檢查 strategy.json
+        if os.path.exists("configs/strategy.json"):
+            try:
+                with open("configs/strategy.json", "r", encoding="utf-8") as f:
+                    strategy_data = json.load(f)
+                APP_STATE.strategyChanged.emit({
+                    'complete': True,
+                    'target': strategy_data.get('target', ''),
+                    'unit': strategy_data.get('unit', 0)
+                })
+            except:
+                pass
+
+        # 檢查 templates
+        template_count = 0
+        if os.path.exists("templates"):
+            template_count = len([f for f in os.listdir("templates") if f.endswith(('.png', '.jpg', '.jpeg'))])
+
+        APP_STATE.templatesChanged.emit({
+            'complete': template_count > 0,
+            'missing': [],
+            'total': template_count
+        })

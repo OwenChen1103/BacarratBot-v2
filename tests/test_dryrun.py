@@ -15,8 +15,8 @@ from unittest.mock import Mock, patch
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.autobet import AutoBetEngine
-from src.autobet.io_events import EventSource, EventSourceMode, GameEvent
+from src.autobet.autobet_engine import AutoBetEngine
+from src.autobet.io_events import NDJSONPlayer, DemoFeeder
 
 
 class TestDryRun(unittest.TestCase):

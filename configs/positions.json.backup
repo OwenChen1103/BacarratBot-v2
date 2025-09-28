@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "description": "GUI generated test positions",
+  "screen": {
+    "width": 1920,
+    "height": 1080,
+    "dpi_scale": 1.0,
+    "last_updated": "2025-09-26T15:40:00Z"
+  },
+  "points": {
+    "banker": {"x": 9999, "y": 8888},
+    "player": {"x": 8888, "y": 7777},
+    "tie": {"x": 7777, "y": 6666},
+    "chip_1k": {"x": 5555, "y": 4444},
+    "chip_100": {"x": 4444, "y": 3333},
+    "confirm": {"x": 3333, "y": 2222},
+    "cancel": {"x": 2222, "y": 1111}
+  },
+  "roi": {
+    "overlay": {"x": 1450, "y": 360, "w": 420, "h": 50}
+  },
+  "validation": {
+    "created_by": "GUI Position Calibrator Test"
+  }
+}

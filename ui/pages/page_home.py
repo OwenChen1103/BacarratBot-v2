@@ -4,10 +4,12 @@ import json
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QFrame, QTableWidget, QTableWidgetItem,
-    QHeaderView, QGroupBox, QProgressBar
+    QHeaderView, QGroupBox, QProgressBar, QCheckBox
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
+
+from ..app_state import APP_STATE
 
 class StatusCard(QFrame):
     """狀態卡片元件"""
@@ -205,45 +207,199 @@ class RecentSessionsCard(QFrame):
             except Exception as e:
                 print(f"載入會話 {filename} 時發生錯誤: {e}")
 
+class HealthIndicator(QFrame):
+    """系統健康度指示器"""
+
+    def __init__(self):
+        super().__init__()
+        self.setup_ui()
+        self._t = {'complete': False}
+        self._p = {'complete': False}
+        self._o = {'has_roi': False}
+        self._s = {'complete': False}
+
+    def setup_ui(self):
+        self.setFrameStyle(QFrame.StyledPanel)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #374151;
+                border: 1px solid #4b5563;
+                border-radius: 8px;
+                padding: 16px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+
+        # 主健康狀態
+        self.health_label = QLabel("🔴 Blocked — complete setup first")
+        self.health_label.setFont(QFont("Microsoft YaHei UI", 14, QFont.Bold))
+        self.health_label.setAlignment(Qt.AlignCenter)
+        self.health_label.setStyleSheet("color: #ef4444; padding: 8px;")
+
+        # 子系統狀態
+        status_layout = QHBoxLayout()
+        self.template_status = QLabel("❌ Templates")
+        self.position_status = QLabel("❌ Positions")
+        self.overlay_status = QLabel("❌ Overlay")
+        self.strategy_status = QLabel("❌ Strategy")
+
+        for label in [self.template_status, self.position_status, self.overlay_status, self.strategy_status]:
+            label.setFont(QFont("Microsoft YaHei UI", 10))
+            label.setAlignment(Qt.AlignCenter)
+            status_layout.addWidget(label)
+
+        layout.addWidget(self.health_label)
+        layout.addLayout(status_layout)
+
+    def update_health(self, t=None, p=None, o=None, s=None):
+        """更新健康狀態"""
+        if t: self._t = t
+        if p: self._p = p
+        if o: self._o = o
+        if s: self._s = s
+
+        # 更新子狀態
+        self.template_status.setText("✅ Templates" if self._t.get('complete') else "❌ Templates")
+        self.template_status.setStyleSheet(f"color: {'#10b981' if self._t.get('complete') else '#ef4444'};")
+
+        self.position_status.setText("✅ Positions" if self._p.get('complete') else "❌ Positions")
+        self.position_status.setStyleSheet(f"color: {'#10b981' if self._p.get('complete') else '#ef4444'};")
+
+        self.overlay_status.setText("✅ Overlay" if self._o.get('has_roi') else "❌ Overlay")
+        self.overlay_status.setStyleSheet(f"color: {'#10b981' if self._o.get('has_roi') else '#ef4444'};")
+
+        self.strategy_status.setText("✅ Strategy" if self._s.get('complete') else "❌ Strategy")
+        self.strategy_status.setStyleSheet(f"color: {'#10b981' if self._s.get('complete') else '#ef4444'};")
+
+        # 更新主狀態
+        all_ready = (self._t.get('complete') and self._p.get('complete') and
+                    self._o.get('has_roi') and self._s.get('complete'))
+        partial_ready = (self._t.get('complete') or self._p.get('complete') or
+                        self._o.get('has_roi') or self._s.get('complete'))
+
+        if all_ready:
+            self.health_label.setText("🟢 Ready — You can start dry-run")
+            self.health_label.setStyleSheet("color: #10b981; padding: 8px;")
+        elif partial_ready:
+            self.health_label.setText("🟡 Needs Attention — finish setup")
+            self.health_label.setStyleSheet("color: #f59e0b; padding: 8px;")
+        else:
+            self.health_label.setText("🔴 Blocked — complete setup first")
+            self.health_label.setStyleSheet("color: #ef4444; padding: 8px;")
+
+class ReadyChecklist(QFrame):
+    """準備就緒檢查清單"""
+
+    def __init__(self):
+        super().__init__()
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.setFrameStyle(QFrame.StyledPanel)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #374151;
+                border: 1px solid #4b5563;
+                border-radius: 8px;
+                padding: 16px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel("📋 準備就緒檢查清單")
+        title.setFont(QFont("Microsoft YaHei UI", 12, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        # 檢查項目
+        self.chk_templates = QCheckBox("🖼️ Templates loaded")
+        self.chk_positions = QCheckBox("📍 Positions calibrated")
+        self.chk_overlay = QCheckBox("🎯 Overlay ready (ROI + threshold)")
+        self.chk_strategy = QCheckBox("⚙️ Strategy configured")
+
+        for chk in [self.chk_templates, self.chk_positions, self.chk_overlay, self.chk_strategy]:
+            chk.setFont(QFont("Microsoft YaHei UI", 10))
+            chk.setEnabled(False)  # 只顯示狀態，不允許手動勾選
+            layout.addWidget(chk)
+
 class HomePage(QWidget):
     navigate_to = Signal(str)
 
     def __init__(self):
         super().__init__()
         self.setup_ui()
-
-    def _card(self, title: str, desc: str, btn_text: str, to_key: str):
-        card = QFrame()
-        card.setFrameStyle(QFrame.StyledPanel)
-        card.setStyleSheet("""
-            QFrame { background:#1f2937; border:1px solid #374151; border-radius:10px; }
-            QLabel[role="title"] { color:#e5e7eb; font-weight:600; }
-            QLabel[role="desc"] { color:#9ca3af; }
-        """)
-        v = QVBoxLayout(card)
-        t = QLabel(title); t.setProperty("role", "title"); t.setFont(QFont("Microsoft YaHei UI", 11))
-        d = QLabel(desc); d.setProperty("role", "desc"); d.setWordWrap(True)
-        b = QPushButton(btn_text)
-        b.clicked.connect(lambda: self.navigate_to.emit(to_key))
-        v.addWidget(t); v.addWidget(d); v.addStretch(); v.addWidget(b, alignment=Qt.AlignRight)
-        return card
+        self.connect_signals()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        header = QLabel("歡迎使用 AutoBet Bot")
-        header.setFont(QFont("Microsoft YaHei UI", 16, QFont.Bold))
-        header.setAlignment(Qt.AlignLeft)
+        layout.setSpacing(16)
 
-        sub = QLabel("建議從左到右依序：模板 → 位置 → 門檻 → 策略 → 主控台（乾跑）")
-        sub.setStyleSheet("color:#9ca3af;")
+        # 標題
+        header = QLabel("🏠 AutoBet Bot 控制中心")
+        header.setFont(QFont("Microsoft YaHei UI", 18, QFont.Bold))
+        header.setAlignment(Qt.AlignCenter)
+        header.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                background-color: #374151;
+                padding: 16px;
+                border-radius: 8px;
+                margin-bottom: 8px;
+            }
+        """)
 
-        cards = QHBoxLayout()
-        cards.addWidget(self._card("放置模板", "把 chips/bets/controls 模板放進 templates/ 並檢查品質。", "前往模板管理", "templates"))
-        cards.addWidget(self._card("校準位置", "雙擊捕捉各元素點位，生成 positions.json。", "前往位置校準", "positions"))
-        cards.addWidget(self._card("開始測試", "使用 Demo 事件與乾跑模式，先跑通整條管線。", "前往主控台", "dashboard"))
+        # 健康度指示器
+        self.health_indicator = HealthIndicator()
+
+        # 準備清單
+        self.ready_checklist = ReadyChecklist()
+
+        # 快速操作
+        self.quick_actions = QuickActionCard()
+        self.quick_actions.action_clicked.connect(self.navigate_to.emit)
+
+        # 最近會話
+        self.recent_sessions = RecentSessionsCard()
+
+        # 佈局
+        top_layout = QHBoxLayout()
+        top_layout.addWidget(self.health_indicator, 2)
+        top_layout.addWidget(self.ready_checklist, 1)
+
+        middle_layout = QHBoxLayout()
+        middle_layout.addWidget(self.quick_actions, 1)
+        middle_layout.addWidget(self.recent_sessions, 1)
 
         layout.addWidget(header)
-        layout.addWidget(sub)
-        layout.addSpacing(8)
-        layout.addLayout(cards)
+        layout.addLayout(top_layout)
+        layout.addLayout(middle_layout)
         layout.addStretch()
+
+    def connect_signals(self):
+        """連接 AppState 事件"""
+        APP_STATE.templatesChanged.connect(self.on_templates_changed)
+        APP_STATE.positionsChanged.connect(self.on_positions_changed)
+        APP_STATE.overlayChanged.connect(self.on_overlay_changed)
+        APP_STATE.strategyChanged.connect(self.on_strategy_changed)
+
+    def on_templates_changed(self, data):
+        """模板狀態變更"""
+        self.health_indicator.update_health(t=data)
+        self.ready_checklist.chk_templates.setChecked(data.get('complete', False))
+
+    def on_positions_changed(self, data):
+        """位置狀態變更"""
+        self.health_indicator.update_health(p=data)
+        self.ready_checklist.chk_positions.setChecked(data.get('complete', False))
+
+    def on_overlay_changed(self, data):
+        """Overlay 狀態變更"""
+        self.health_indicator.update_health(o=data)
+        self.ready_checklist.chk_overlay.setChecked(data.get('has_roi', False))
+
+    def on_strategy_changed(self, data):
+        """策略狀態變更"""
+        self.health_indicator.update_health(s=data)
+        self.ready_checklist.chk_strategy.setChecked(data.get('complete', False))

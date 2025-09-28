@@ -11,6 +11,13 @@ import numpy as np
 import pyautogui
 from typing import Dict, Any, List, Tuple, Optional
 
+# 修復 Windows 控制台編碼問題
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 # 禁用 pyautogui 安全機制
 pyautogui.FAILSAFE = False
 

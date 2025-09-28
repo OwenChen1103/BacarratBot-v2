@@ -109,31 +109,11 @@ class EngineWorker(QThread):
         self._last_winner = None
 
     def initialize_engine(self, dry_run: bool = True) -> bool:
-        """初始化引擎（最小可行版）"""
+        """初始化引擎（不載入配置，等啟動時再載入）"""
         try:
             self.engine = AutoBetEngine(dry_run=dry_run)
             self._dry_run = dry_run
-            self._emit_log("INFO", "Engine", "引擎已初始化")
-
-            # 嘗試載入必要檔案，但不強制存在
-            ok = True
-            ok = ok and self.engine.load_positions("configs/positions.sample.json", dpi_scale=1.0)
-            ok = ok and self.engine.load_strategy("configs/strategy.default.json")
-            # ui.yaml 可選
-            ui_cfg = {}
-            try:
-                import yaml
-                with open("configs/ui.yaml", "r", encoding="utf-8") as f:
-                    ui_cfg = yaml.safe_load(f)
-            except Exception:
-                pass
-            self.engine.load_ui_config(ui_cfg)
-
-            init_ok = self.engine.initialize_components()
-            if init_ok:
-                self._emit_log("INFO", "Engine", "元件初始化成功")
-            else:
-                self._emit_log("WARNING", "Engine", "元件初始化部分失敗（可能缺少配置檔案）")
+            self._emit_log("INFO", "Engine", "引擎已初始化 - 等待配置載入")
 
             # 開始狀態輪詢
             self._tick_running = True
@@ -180,41 +160,82 @@ class EngineWorker(QThread):
 
             self.msleep(200)
 
-    def start_engine(self, source: str, **kwargs) -> bool:
-        """啟動引擎與事件來源"""
+    def start_engine(self, mode: str = "simulation", **kwargs) -> bool:
+        """啟動引擎
+        Args:
+            mode: "simulation" (模擬模式) 或 "real" (實戰模式)
+        """
         if not self.engine:
             self._emit_log("ERROR", "Engine", "引擎未初始化")
             return False
 
-        # 創建事件來源
-        if source == "demo":
-            interval = int(kwargs.get("interval", 15))
-            seed = kwargs.get("seed", 42)
-            self.event_feeder = DemoFeeder(interval, self._handle_event, seed)
-        elif source == "ndjson":
-            file_path = kwargs.get("file_path", "data/sessions/events.sample.ndjson")
-            if not os.path.exists(file_path):
-                self._emit_log("ERROR", "Events", f"檔案不存在: {file_path}")
+        try:
+            # 載入實際配置
+            if not self._load_real_configs():
                 return False
-            interval = float(kwargs.get("interval", 1.0))
-            self.event_feeder = NDJSONPlayer(file_path, self._handle_event, interval)
-        else:
-            self._emit_log("ERROR", "Events", f"未知事件來源: {source}")
+
+            # 設定模式
+            self._is_simulation = (mode == "simulation")
+            self.set_dry_run(self._is_simulation)
+
+            # 啟動引擎讓它檢測 overlay
+            if self.engine:
+                try:
+                    self.engine.set_enabled(True)
+                except AttributeError:
+                    pass
+
+            self._enabled = True
+
+            mode_text = "模擬" if self._is_simulation else "實戰"
+            self._emit_log("INFO", "Engine", f"{mode_text}模式已啟動 - 開始檢測遊戲畫面")
+
+            # 立即發送狀態更新
+            self.state_changed.emit("running")
+
+            return True
+
+        except Exception as e:
+            self._emit_log("ERROR", "Engine", f"啟動失敗: {e}")
             return False
 
-        if self.engine:
-            try:
-                self.engine.set_enabled(True)
-            except AttributeError:
-                pass  # 引擎可能沒有 set_enabled 方法
-        self._enabled = True
-        self.event_feeder.start()
-        self._emit_log("INFO", "Events", f"事件來源啟動: {source}")
+    def _load_real_configs(self) -> bool:
+        """載入真實的配置檔案"""
+        try:
+            # 載入 positions.json
+            if os.path.exists("configs/positions.json"):
+                success = self.engine.load_positions("configs/positions.json")
+                if not success:
+                    self._emit_log("ERROR", "Config", "載入 positions.json 失敗")
+                    return False
+                self._emit_log("INFO", "Config", "✅ positions.json 載入成功")
+            else:
+                self._emit_log("ERROR", "Config", "未找到 configs/positions.json")
+                return False
 
-        # 立即發送狀態更新
-        self.state_changed.emit("running")
+            # 載入 strategy.json
+            if os.path.exists("configs/strategy.json"):
+                success = self.engine.load_strategy("configs/strategy.json")
+                if not success:
+                    self._emit_log("ERROR", "Config", "載入 strategy.json 失敗")
+                    return False
+                self._emit_log("INFO", "Config", "✅ strategy.json 載入成功")
+            else:
+                self._emit_log("ERROR", "Config", "未找到 configs/strategy.json")
+                return False
 
-        return True
+            # 初始化引擎組件 (detector, actuator 等)
+            success = self.engine.initialize_components()
+            if not success:
+                self._emit_log("ERROR", "Engine", "引擎組件初始化失敗")
+                return False
+
+            self._emit_log("INFO", "Engine", "✅ 引擎組件初始化成功")
+            return True
+
+        except Exception as e:
+            self._emit_log("ERROR", "Config", f"載入配置失敗: {e}")
+            return False
 
     def stop_engine(self):
         self._enabled = False

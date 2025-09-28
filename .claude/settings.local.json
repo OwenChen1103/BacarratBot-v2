@@ -3,7 +3,14 @@
     "allow": [
       "Bash(mkdir:*)",
       "Bash(dir:*)",
-      "Bash(timeout 10 python -m src.autobet.run_bot:*)"
+      "Bash(timeout 10 python -m src.autobet.run_bot:*)",
+      "Bash(tree:*)",
+      "Bash(python:*)",
+      "Bash(timeout:*)",
+      "Bash(cat:*)",
+      "Bash(chcp:*)",
+      "Bash(set PYTHONIOENCODING=utf-8)",
+      "Read(//c/Users/owen9/OneDrive/Pictures/Screenshots/**)"
     ],
     "deny": [],
     "ask": []

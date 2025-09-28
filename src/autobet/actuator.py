@@ -56,3 +56,62 @@ class Actuator:
 
     def cancel(self) -> bool:
         return self._click_point("cancel")
+
+    def dry_click_point(self, x: int, y: int, label: str = "") -> bool:
+        """Dry-run 點擊指定座標（僅記錄，不實際點擊）"""
+        jitter = int(self.ui.get("click", {}).get("jitter_px", 2))
+        rx = x + random.randint(-jitter, jitter)
+        ry = y + random.randint(-jitter, jitter)
+
+        mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
+        cd = random.randint(int(mv[0]), int(mv[1]))/1000.0
+
+        label_text = f" ({label})" if label else ""
+        logger.info(f"[DRY] click{label_text} -> ({rx},{ry})")
+        time.sleep(cd)  # 模擬點擊延遲
+        return True
+
+    def dry_click_key(self, key_name: str) -> bool:
+        """Dry-run 點擊指定按鍵"""
+        pt = self.pos.get("points", {}).get(key_name)
+        if not pt:
+            logger.error(f"[DRY] point missing: {key_name}")
+            return False
+        return self.dry_click_point(pt["x"], pt["y"], key_name)
+
+    def move_to(self, x: int, y: int) -> bool:
+        """移動游標到指定座標（不點擊）"""
+        jitter = int(self.ui.get("click", {}).get("jitter_px", 2))
+        rx = x + random.randint(-jitter, jitter)
+        ry = y + random.randint(-jitter, jitter)
+
+        mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
+        md = random.randint(int(mv[0]), int(mv[1]))/1000.0
+
+        if self.dry:
+            logger.info(f"[MOVE-ONLY] ({rx},{ry})")
+            time.sleep(md)
+            return True
+        else:
+            # 多種 fallback 方式
+            moved = False
+
+            # 1) pyautogui
+            try:
+                pyautogui.FAILSAFE = False
+                pyautogui.moveTo(rx, ry, duration=0)
+                moved = True
+            except Exception:
+                pass
+
+            # 2) Win32 SetCursorPos fallback
+            if not moved:
+                try:
+                    import ctypes
+                    ctypes.windll.user32.SetCursorPos(int(rx), int(ry))
+                    moved = True
+                except Exception as e:
+                    logger.warning(f"move_to fallback failed: {e}")
+
+            time.sleep(md)
+            return moved

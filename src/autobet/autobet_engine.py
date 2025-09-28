@@ -1,7 +1,7 @@
 # src/autobet/autobet_engine.py
 import os, csv, json, time, logging, threading
 from typing import Dict, Optional
-from .detectors import OverlayDetector
+from .detectors import OverlayDetector, ProductionOverlayDetector
 from .planner import build_click_plan
 from .actuator import Actuator
 from .risk import IdempotencyGuard, check_limits
@@ -25,6 +25,8 @@ class AutoBetEngine:
         self.net = 0
         self.step_idx = 0  # for martingale
         self.guard = IdempotencyGuard()
+        self.current_plan = None
+        self.session_ctx = {"last_result_ready": False}
         # session files
         os.makedirs("data/sessions", exist_ok=True)
         ts = time.strftime("%Y%m%d-%H%M%S")
@@ -96,16 +98,118 @@ class AutoBetEngine:
             time.sleep(0.12)
 
     def _tick(self):
+        """主狀態機循環 - 完整狀態轉換邏輯"""
         if not self.enabled:
             self.state = "stopped"
             return
-        # overlay 判斷
-        is_open = self.overlay.overlay_is_open() if self.overlay else False
-        if is_open and self.state in ("idle","waiting_round","eval_result"):
-            self._do_betting_cycle()
-        elif not is_open and self.state in ("placing_bets", "betting_open"):
-            # 下注期關閉，自動回 idle
-            self.state = "in_round"
+
+        try:
+            # 檢查是否可下注
+            is_open = self.overlay.overlay_is_open() if self.overlay else False
+
+            if self.state == "idle":
+                if is_open:
+                    self.state = "betting_open"
+                    self._emit_state_change()
+
+            elif self.state == "betting_open":
+                if is_open:
+                    # 構建下注計畫並檢查風控
+                    if self._prepare_betting_plan():
+                        self.state = "placing_bets"
+                        self._emit_state_change()
+                        self._execute_betting_plan()
+                else:
+                    # 下注期關閉，直接進入 in_round
+                    self.state = "in_round"
+                    self._emit_state_change()
+
+            elif self.state == "placing_bets":
+                # 下注動作完成，進入確認等待
+                self.state = "wait_confirm"
+                self._emit_state_change()
+
+            elif self.state == "wait_confirm":
+                # 送單前最後檢查
+                if not self.dry:
+                    if is_open:
+                        self.act.confirm()
+                        logger.info("Confirmed betting")
+                    else:
+                        if self.ui.get("safety", {}).get("cancel_on_close", True):
+                            self.act.cancel()
+                            logger.warning("overlay closed before confirm -> cancelled")
+                self.state = "in_round"
+                self._emit_state_change()
+
+            elif self.state == "in_round":
+                # 等待結果事件，由 _handle_result 觸發轉換
+                pass
+
+            elif self.state == "eval_result":
+                # 結果處理完成，回到等待狀態
+                self.state = "idle"
+                self._emit_state_change()
+
+            elif self.state in ("waiting_round", "paused", "error"):
+                # 特殊狀態處理
+                if self.state == "waiting_round" and is_open:
+                    self.state = "idle"
+                    self._emit_state_change()
+
+        except Exception as e:
+            logger.error(f"state machine error: {e}", exc_info=True)
+            self.state = "error"
+            self._emit_state_change()
+
+    def _emit_state_change(self):
+        """通知狀態變更"""
+        logger.debug(f"State changed to: {self.state}")
+
+    def _prepare_betting_plan(self) -> bool:
+        """準備下注計畫並檢查風控"""
+        try:
+            unit = int(self.strategy.get("unit", 1000))
+            targets = self.strategy.get("targets", ["banker"])
+            split = self.strategy.get("split_units", {"banker": 1})
+            targets_units = {t: int(split.get(t, 1)) for t in targets}
+
+            plan = build_click_plan(unit, targets_units)
+            plan_repr = json.dumps(plan, ensure_ascii=False)
+            round_id = f"NOID-{int(time.time())}"
+
+            # 風控檢查
+            per_round_amount = unit * sum(targets_units.values())
+            ok, reason = check_limits(self.strategy.get("limits", {}), per_round_amount, self.net)
+            if not ok:
+                logger.warning(f"Risk blocked: {reason}")
+                self.state = "paused"
+                return False
+
+            # 冪等檢查
+            if not self.guard.accept(round_id, plan_repr):
+                logger.info("Idempotent reject (same plan in same round)")
+                self.state = "waiting_round"
+                return False
+
+            self.current_plan = plan
+            return True
+
+        except Exception as e:
+            logger.error(f"Prepare betting plan failed: {e}", exc_info=True)
+            return False
+
+    def _execute_betting_plan(self):
+        """執行下注計畫"""
+        if not self.current_plan:
+            return
+
+        logger.info(f"Executing betting plan: {len(self.current_plan)} actions")
+        for kind, val in self.current_plan:
+            if kind == "chip":
+                self.act.click_chip_value(int(val))
+            elif kind == "bet":
+                self.act.click_bet(val)
 
     def _do_betting_cycle(self):
         self.state = "betting_open"
@@ -152,19 +256,48 @@ class AutoBetEngine:
         self.state = "in_round"
 
     def _handle_result(self, evt: Dict):
-        # 更新統計
-        self.rounds += 1
-        self.last_winner = evt.get("winner")
-        # MVP：不計賠率，僅記錄局數；之後可依賠率調整 self.net
-        self.state = "eval_result"
-        # 寫會話紀錄
-        row = [int(time.time()*1000), self.state, evt.get("round_id"), self.last_winner, "-", "-", self.net]
-        with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(row)
-        with open(self.ndjson_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(evt, ensure_ascii=False) + "\n")
-        # 準備下一輪
-        self.state = "waiting_round"
+        """處理遊戲結果事件"""
+        try:
+            # 更新統計
+            self.rounds += 1
+            self.last_winner = evt.get("winner")
+
+            # 設置結果就緒標記，讓狀態機轉換到 eval_result
+            self.session_ctx["last_result_ready"] = True
+
+            # 進入結果評估狀態
+            if self.state == "in_round":
+                self.state = "eval_result"
+                self._emit_state_change()
+                self._apply_result_and_staking(evt)
+
+            # 寫會話記錄
+            row = [int(time.time()*1000), self.state, evt.get("round_id"), self.last_winner, "-", "-", self.net]
+            with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow(row)
+            with open(self.ndjson_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(evt, ensure_ascii=False) + "\n")
+
+            logger.info(f"Result processed: Round {self.rounds}, Winner: {self.last_winner}")
+
+        except Exception as e:
+            logger.error(f"Handle result failed: {e}", exc_info=True)
+            self.state = "error"
+
+    def _apply_result_and_staking(self, evt: Dict):
+        """應用結果並更新馬丁格爾等遞增邏輯"""
+        try:
+            # MVP: 簡單的勝負統計，暫不計算實際賠率
+            # 後續可根據策略和賠率計算實際損益
+
+            # 重置結果標記
+            self.session_ctx["last_result_ready"] = False
+            self.current_plan = None
+
+            logger.debug(f"Applied result for round {self.rounds}")
+
+        except Exception as e:
+            logger.error(f"Apply result failed: {e}", exc_info=True)
 
     def get_status(self) -> Dict:
         return {

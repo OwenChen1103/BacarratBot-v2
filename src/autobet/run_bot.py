@@ -114,9 +114,17 @@ def run_console_mode(args, env_config):
     # 創建引擎
     engine = AutoBetEngine(dry_run=env_config['dry_run'])
 
-    # 載入配置
-    if not engine.load_positions(args.positions, env_config['screen_dpi_scale']):
-        logger.error("載入位置配置失敗")
+    # 載入位置配置 (GUI 生成的檔案優先)
+    positions_file = args.positions
+    default_gui_positions = 'configs/positions.json'
+    if os.path.exists(default_gui_positions):
+        positions_file = default_gui_positions
+        logger.info(f"使用 GUI 生成的位置配置: {positions_file}")
+    else:
+        logger.info(f"使用指定的位置配置: {positions_file}")
+
+    if not engine.load_positions(positions_file, env_config['screen_dpi_scale']):
+        logger.error(f"載入位置配置失敗: {positions_file}")
         return 1
 
     if not engine.load_strategy(args.strategy):

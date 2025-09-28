@@ -1,45 +1,29 @@
 {
-  "filters": [
-    {
-      "override_targets": [
-        "banker"
-      ],
-      "when": "last_winner=='P'"
+    "unit": 100,
+    "target": "P",
+    "martingale": {
+        "enabled": true,
+        "max_level": 7,
+        "reset_on_win": true,
+        "progression": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64
+        ]
+    },
+    "risk_control": {
+        "max_loss": 5000,
+        "max_win": 3000,
+        "session_limit": 50,
+        "consecutive_loss_limit": 5
+    },
+    "betting_logic": {
+        "follow_trend": true,
+        "switch_after_losses": 3,
+        "skip_tie": true
     }
-  ],
-  "limits": {
-    "max_retries": 1,
-    "per_round_cap": 5000,
-    "session_stop_loss": -20000,
-    "session_take_profit": 30000
-  },
-  "split_units": {
-    "b_pair": 1,
-    "banker": 1,
-    "lucky6": 1,
-    "p_pair": 1,
-    "player": 1,
-    "tie": 1
-  },
-  "staking": {
-    "base_units": 1,
-    "max_steps": 3,
-    "reset_on_win": true,
-    "type": "fixed"
-  },
-  "targets": [
-    "banker"
-  ],
-  "timing": {
-    "click_delay_ms": [
-      40,
-      80
-    ],
-    "move_delay_ms": [
-      40,
-      120
-    ],
-    "pre_confirm_wait_ms": 120
-  },
-  "unit": 1000
 }

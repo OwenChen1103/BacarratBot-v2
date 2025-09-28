@@ -1,7 +1,7 @@
 # src/autobet/autobet_engine.py
 import os, csv, json, time, logging, threading
 from typing import Dict, Optional
-from .detectors import OverlayDetector, ProductionOverlayDetector
+from .detectors import OverlayDetectorWrapper as OverlayDetector, ProductionOverlayDetector
 from .planner import build_click_plan
 from .actuator import Actuator
 from .risk import IdempotencyGuard, check_limits
@@ -60,6 +60,19 @@ class AutoBetEngine:
         try:
             self.overlay = OverlayDetector(self.ui, self.pos)
             self.act = Actuator(self.pos, self.ui, dry_run=self.dry)
+
+            # 加這兩行 - 確認載入的是哪個類
+            logger.warning(
+                "USING OVERLAY: %s (module=%s)",
+                type(self.overlay).__name__, type(self.overlay).__module__
+            )
+
+            # 截圖健康檢查
+            ok, err = getattr(self.overlay, "health_check", lambda: (True, ""))()
+            if not ok:
+                logger.error(f"Overlay screenshot health-check failed: {err}")
+                raise RuntimeError(err)
+
             return True
         except Exception as e:
             logger.error(f"init components failed: {e}", exc_info=True)

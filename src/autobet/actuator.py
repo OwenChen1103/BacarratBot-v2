@@ -27,8 +27,9 @@ class Actuator:
         cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
 
         if self.dry:
-            logger.info(f"[DRY] click {name} -> ({rx},{ry})")
-            time.sleep(md + cd)
+            logger.info(f"[SIMULATION] move to {name} -> ({rx},{ry}) [NO CLICK]")
+            pyautogui.moveTo(rx, ry, duration=md)  # 模擬時移動滑鼠但不點擊
+            time.sleep(cd)
             return True
         else:
             pyautogui.moveTo(rx, ry, duration=md)

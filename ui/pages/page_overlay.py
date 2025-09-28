@@ -428,7 +428,7 @@ class OverlayPage(QWidget):
         right_panel = self.create_control_panel()
         main_splitter.addWidget(right_panel)
 
-        main_splitter.setSizes([900, 360])
+        main_splitter.setSizes([900, 400])  # 增加右側面板寬度
 
     def create_preview_panel(self):
         """創建預覽面板"""
@@ -545,7 +545,8 @@ class OverlayPage(QWidget):
         panel = QScrollArea()
         panel.setWidgetResizable(True)
         panel.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        panel.setMinimumWidth(350)
+        panel.setMinimumWidth(380)  # 增加最小寬度
+        panel.setMaximumWidth(450)  # 設定最大寬度
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -999,13 +1000,13 @@ class OverlayPage(QWidget):
             QPushButton:hover { background: #b91c1c; }
         """)
 
-        self.log_message("🚀 開始即時檢測")
+        self.log_message("開始即時檢測")
 
     def stop_detection(self):
         """停止檢測"""
         self.detection_active = False
         self.detection_timer.stop()
-        self.start_btn.setText("🚀 開始檢測")
+        self.start_btn.setText("開始檢測")
         self.start_btn.setStyleSheet("""
             QPushButton {
                 background: #10b981;
@@ -1346,12 +1347,12 @@ class OverlayPage(QWidget):
                 with open(POSITIONS_FILE, "r", encoding="utf-8") as f:
                     positions_data = json.load(f)
 
-            # 創建備份
-            if os.path.exists(POSITIONS_FILE):
-                backup_name = f"positions.{time.strftime('%Y%m%d-%H%M')}.json.bak"
-                backup_path = os.path.join("configs", backup_name)
-                import shutil
-                shutil.copy2(POSITIONS_FILE, backup_path)
+            # 創建備份 (已停用)
+            # if os.path.exists(POSITIONS_FILE):
+            #     backup_name = f"positions.{time.strftime('%Y%m%d-%H%M')}.json.bak"
+            #     backup_path = os.path.join("configs", backup_name)
+            #     import shutil
+            #     shutil.copy2(POSITIONS_FILE, backup_path)
 
             # 更新 ROI
             if "roi" not in positions_data:

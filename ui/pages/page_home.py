@@ -88,17 +88,17 @@ class QuickActionCard(QFrame):
 
         layout = QVBoxLayout(self)
 
-        title = QLabel("🚀 快速動作")
+        title = QLabel("快速動作")
         title.setFont(QFont("Microsoft YaHei UI", 12, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
         # 動作按鈕
         actions = [
-            ("📍 捕捉點位", "positions", "primary"),
-            ("🎯 檢查門檻", "overlay", "primary"),
-            ("🖼️ 檢查模板", "templates", "secondary"),
-            ("🧪 開始乾跑", "dashboard", "success")
+            ("位置校準", "positions", "primary"),
+            ("可下注判斷", "overlay", "primary"),
+            ("策略設定", "strategy", "primary"),
+            ("開始實戰", "dashboard", "success")
         ]
 
         for text, action, style_class in actions:
@@ -279,13 +279,13 @@ class HealthIndicator(QFrame):
                         self._o.get('has_roi') or self._s.get('complete'))
 
         if all_ready:
-            self.health_label.setText("🟢 Ready — You can start dry-run")
+            self.health_label.setText("Ready — 前置準備已就緒")
             self.health_label.setStyleSheet("color: #10b981; padding: 8px;")
         elif partial_ready:
-            self.health_label.setText("🟡 Needs Attention — finish setup")
+            self.health_label.setText("Needs Attention — 待設定")
             self.health_label.setStyleSheet("color: #f59e0b; padding: 8px;")
         else:
-            self.health_label.setText("🔴 Blocked — complete setup first")
+            self.health_label.setText("Blocked — 須完成設定")
             self.health_label.setStyleSheet("color: #ef4444; padding: 8px;")
 
 class ReadyChecklist(QFrame):
@@ -337,7 +337,7 @@ class HomePage(QWidget):
         layout.setSpacing(16)
 
         # 標題
-        header = QLabel("🏠 AutoBet Bot 控制中心")
+        header = QLabel("AutoBet Bot 控制中心")
         header.setFont(QFont("Microsoft YaHei UI", 18, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
         header.setStyleSheet("""

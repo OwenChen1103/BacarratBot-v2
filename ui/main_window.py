@@ -51,20 +51,20 @@ class MainWindow(QMainWindow):
         self.pages = {}
         home_page = HomePage()
         home_page.navigate_to.connect(self.switch_to_page)
-        self.add_page("home", home_page, "🏠 首頁")
+        self.add_page("home", home_page, "首頁")
 
-        self.add_page("templates", TemplatesPage(), "🖼️ 模板管理")
-        self.add_page("positions", PositionsPage(), "📍 位置校準")
-        self.add_page("overlay", OverlayPage(), "🎯 可下注判斷")
-        self.add_page("strategy", StrategyPage(), "⚙️ 策略設定")
+        self.add_page("templates", TemplatesPage(), "模板管理")
+        self.add_page("positions", PositionsPage(), "位置校準")
+        self.add_page("overlay", OverlayPage(), "可下注判斷")
+        self.add_page("strategy", StrategyPage(), "策略設定")
 
         dashboard_page = DashboardPage()
         dashboard_page.navigate_to.connect(self.switch_to_page)
-        self.add_page("dashboard", dashboard_page, "🎮 實戰主控台")
+        self.add_page("dashboard", dashboard_page, "實戰主控台")
 
-        self.add_page("events", EventsPage(), "📡 事件來源")
-        self.add_page("sessions", SessionsPage(), "📊 記錄回放")
-        self.add_page("settings", SettingsPage(), "🔧 系統設定")
+        # self.add_page("events", EventsPage(), "📡 事件來源")  # 暫時移除，直接使用 overlay 檢測
+        self.add_page("sessions", SessionsPage(), "記錄回放")
+        self.add_page("settings", SettingsPage(), "系統設定")
 
         self.nav.setCurrentRow(0)
 
@@ -164,13 +164,20 @@ class MainWindow(QMainWindow):
             except:
                 pass
 
-        # 檢查 templates
-        template_count = 0
-        if os.path.exists("templates"):
-            template_count = len([f for f in os.listdir("templates") if f.endswith(('.png', '.jpg', '.jpeg'))])
+        # 檢查 overlay 模板配置（從 positions.json 中讀取）
+        template_ready = False
+        try:
+            if os.path.exists("configs/positions.json"):
+                with open("configs/positions.json", "r", encoding="utf-8") as f:
+                    pos_data = json.load(f)
+                template_paths = pos_data.get("overlay_params", {}).get("template_paths", {})
+                qing_path = template_paths.get("qing")
+                template_ready = bool(qing_path and os.path.exists(qing_path))
+        except:
+            pass
 
         APP_STATE.templatesChanged.emit({
-            'complete': template_count > 0,
-            'missing': [],
-            'total': template_count
+            'complete': template_ready,
+            'missing': [] if template_ready else ['qing'],
+            'total': 1 if template_ready else 0
         })

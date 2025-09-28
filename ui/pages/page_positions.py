@@ -126,15 +126,15 @@ class PositionsPage(QWidget):
     # ---------- UI Setup ----------
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(2)  # 減少間距
+        main_layout.setContentsMargins(2, 0, 2, 2)  # 減少邊距，像 overlay 一樣
 
         # 標題列 - 包含螢幕信息
         self.setup_header(main_layout)
 
         # 主面板 - 水平分割
         self.splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(self.splitter)
+        main_layout.addWidget(self.splitter, 1)  # 添加 stretch factor，佔用剩餘空間
 
         # 左邊 - 截圖預覽與放大鏡
         left_panel = self.create_preview_panel()
@@ -145,15 +145,15 @@ class PositionsPage(QWidget):
         self.splitter.addWidget(right_panel)
 
         # 設定分割比例（右欄預設較窄）
-        self.splitter.setSizes([max(320, self.width() - 380), 380])
+        self.splitter.setSizes([max(320, self.width() - 400), 400])
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)
         self.splitter.splitterMoved.connect(self._on_splitter_moved)
 
-        # 狀態列
-        self.status_label = QLabel("狀態：等待操作")
-        self.status_label.setStyleSheet("color: #10b981; font-weight: bold; padding: 4px;")
-        main_layout.addWidget(self.status_label)
+        # 狀態列 - 移到右側面板內部，不佔用主佈局空間
+        # self.status_label = QLabel("狀態：等待操作")
+        # self.status_label.setStyleSheet("color: #10b981; font-weight: bold; padding: 4px;")
+        # main_layout.addWidget(self.status_label)
 
     def create_bottom_panel(self):
         # 已復原：不再使用底部分頁
@@ -162,29 +162,16 @@ class PositionsPage(QWidget):
 
     def setup_header(self, layout):
         """設定標題區域"""
-        header = QFrame()
-        header.setStyleSheet("""
-            QFrame {
-                background-color: #111827;
-                border: 1px solid #374151;
-                border-radius: 8px;
-                padding: 8px;
-            }
-        """)
-        header_layout = QVBoxLayout(header)
-
-        title_row = QHBoxLayout()
-        title = QLabel("📍 位置校準（完整版）")
+        # 簡化標題，像 overlay 一樣緊湊
+        title = QLabel("📍 位置校準")
         title.setFont(QFont("Microsoft YaHei UI", 12, QFont.Bold))
-        title.setStyleSheet("color: #f3f4f6;")
-        title_row.addWidget(title)
+        title.setStyleSheet("color: #f3f4f6; padding: 4px 8px; margin: 0px;")
+        title.setFixedHeight(26)  # 固定高度避免過大
+        layout.addWidget(title)
 
-        # 復原：移除 Zoom/Fit/收合控制
-        title_row.addStretch()
-        header_layout.addLayout(title_row)
-
-        # 螢幕信息列
+        # 螢幕信息列 - 簡化為單行
         screen_row = QHBoxLayout()
+        screen_row.setContentsMargins(0, 0, 0, 0)
         screen_row.addWidget(QLabel("螢幕:"))
 
         self.screen_combo = QComboBox()
@@ -196,9 +183,11 @@ class PositionsPage(QWidget):
         screen_row.addWidget(self.screen_info_label)
 
         screen_row.addStretch()
-        header_layout.addLayout(screen_row)
-
-        layout.addWidget(header)
+        
+        # 創建一個簡單的容器來放置螢幕信息
+        screen_container = QWidget()
+        screen_container.setLayout(screen_row)
+        layout.addWidget(screen_container)
 
     def create_preview_panel(self):
         """創建預覽面板"""
@@ -208,9 +197,12 @@ class PositionsPage(QWidget):
                 background-color: #111827;
                 border: 1px solid #374151;
                 border-radius: 8px;
+                padding: 0px;
             }
         """)
         layout = QVBoxLayout(panel)
+        layout.setSpacing(2)  # 減少間距
+        layout.setContentsMargins(2, 0, 2, 2)  # 減少邊距，像 overlay 一樣
 
         # 操作按鈕列
         btn_row = QHBoxLayout()
@@ -295,161 +287,15 @@ class PositionsPage(QWidget):
         panel.setWidgetResizable(True)
         panel.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         panel.setMinimumWidth(320)
-        panel.setMaximumWidth(380)
+        panel.setMaximumWidth(400)  # 增加最大寬度
 
         content = QWidget()
         layout = QVBoxLayout(content)
 
-        # 鍵位控制組
-        self.setup_key_controls(layout)
-
-        # 保存操作組
-        self.setup_save_controls(layout)
-
-        layout.addStretch()
-        panel.setWidget(content)
-        return panel
-
-    def create_styled_button(self, text: str, color: str, callback, tooltip: str = ""):
-        """創建統一樣式的按鈕"""
-        btn = QPushButton(text)
-        btn.clicked.connect(callback)
-        if tooltip:
-            btn.setToolTip(tooltip)
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {color};
-                color: white;
-                border: none;
-                padding: 8px 12px;
-                border-radius: 4px;
-                font-weight: bold;
-                min-width: 80px;
-            }}
-            QPushButton:hover {{
-                background-color: rgba(255,255,255,0.1);
-            }}
-            QPushButton:disabled {{
-                background: #374151;
-                color: #6b7280;
-            }}
-        """)
-        return btn
-
-    def setup_header(self, layout):
-        """設定標題區域"""
-        header = QFrame()
-        header.setStyleSheet("""
-            QFrame {
-                background-color: #111827;
-                border: 1px solid #374151;
-                border-radius: 8px;
-                padding: 8px;
-            }
-        """)
-        header_layout = QVBoxLayout(header)
-
-        title = QLabel("📍 位置校準（完整版）")
-        title.setFont(QFont("Microsoft YaHei UI", 12, QFont.Bold))
-        title.setStyleSheet("color: #f3f4f6;")
-        header_layout.addWidget(title)
-
-        # 螢幕信息列
-        screen_row = QHBoxLayout()
-        screen_row.addWidget(QLabel("螢幕:"))
-
-        self.screen_combo = QComboBox()
-        self.screen_combo.currentIndexChanged.connect(self.on_screen_changed)
-        screen_row.addWidget(self.screen_combo)
-
-        self.screen_info_label = QLabel("無螢幕")
-        self.screen_info_label.setStyleSheet("color: #9ca3af; font-family: monospace;")
-        screen_row.addWidget(self.screen_info_label)
-
-        screen_row.addStretch()
-        header_layout.addLayout(screen_row)
-
-        layout.addWidget(header)
-
-    def create_preview_panel(self):
-        """創建預覽面板"""
-        panel = QFrame()
-        panel.setStyleSheet("""
-            QFrame {
-                background-color: #111827;
-                border: 1px solid #374151;
-                border-radius: 8px;
-            }
-        """)
-        layout = QVBoxLayout(panel)
-
-        # 操作按鈕列
-        btn_row = QHBoxLayout()
-        btn_cap = self.create_styled_button("截取螢幕", "#1e40af", self.capture_screen)
-        btn_load = self.create_styled_button("載入截圖", "#059669", self.load_existing)
-        btn_row.addWidget(btn_cap)
-        btn_row.addWidget(btn_load)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-        # 預覽區域
-        preview_container = QFrame()
-        preview_layout = QHBoxLayout(preview_container)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
-
-        # 截圖預覽（使用 ScrollArea 包住，並將放大鏡疊加在預覽上）
-        self.preview = QLabel("請先截圖或載入截圖")
-        self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumHeight(400)
-        self.preview.setStyleSheet("""
-            QLabel {
-                border: 1px dashed #6b7280;
-                background-color: #1f2937;
-                color: #9ca3af;
-                border-radius: 4px;
-            }
-        """)
-        self.preview.mousePressEvent = self.on_click
-        self.preview.mouseMoveEvent = self.on_mouse_move
-
-        from PySide6.QtWidgets import QScrollArea
-        self.preview_scroll = QScrollArea()
-        self.preview_scroll.setWidgetResizable(True)
-        self.preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.preview_scroll.setFrameShape(QFrame.NoFrame)
-        self.preview_scroll.setWidget(self.preview)
-        preview_layout.addWidget(self.preview_scroll)
-
-        # 放大鏡改為疊加在 preview 右上角
-        self.magnifier = QLabel(self.preview)
-        self.magnifier.setText("放大鏡")
-        self.magnifier.setFixedSize(100, 100)
-        self.magnifier.setStyleSheet("""
-            QLabel {
-                border: 2px solid #60a5fa;
-                background-color: #1f2937;
-                color: #9ca3af;
-                border-radius: 4px;
-            }
-        """)
-        self.magnifier.setAlignment(Qt.AlignCenter)
-        self.magnifier.raise_()
-
-        layout.addWidget(preview_container)
-        return panel
-
-    def create_control_panel(self):
-        """創建控制面板"""
-        panel = QScrollArea()
-        panel.setWidgetResizable(True)
-        panel.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        content = QWidget()
-        layout = QVBoxLayout(content)
-
-        # 右欄可收合
-        toggle_btn = self.create_styled_button("⟨ 收合右欄", "#374151", self.toggle_sidebar)
-        layout.addWidget(toggle_btn)
+        # 狀態列 - 移到右側面板頂部
+        self.status_label = QLabel("狀態：等待操作")
+        self.status_label.setStyleSheet("color: #10b981; font-weight: bold; padding: 4px; background: #1f2937; border-radius: 4px;")
+        layout.addWidget(self.status_label)
 
         # 鍵位控制組
         self.setup_key_controls(layout)
@@ -492,6 +338,7 @@ class PositionsPage(QWidget):
             }}
         """)
         return btn
+
 
     def setup_key_controls(self, layout):
         """設定鍵位控制組"""
@@ -912,7 +759,7 @@ class PositionsPage(QWidget):
         sizes = self.splitter.sizes()
         # 已收合：展開
         if sizes[1] < 40:
-            self.splitter.setSizes([max(320, self.width()-360), 360])
+            self.splitter.setSizes([max(320, self.width()-400), 400])
         else:
             # 收到最小
             self.splitter.setSizes([self.width()-12, 12])
@@ -1100,9 +947,9 @@ class PositionsPage(QWidget):
                 if key in fixed_data:
                     self.positions[key] = fixed_data[key]
 
-            # 合併 points
+            # 載入 points（完全覆蓋，不合併）
             if "points" in fixed_data:
-                self.positions["points"].update(fixed_data["points"])
+                self.positions["points"] = fixed_data["points"].copy()
 
             # 載入測試設定
             if "meta" in fixed_data:
@@ -1129,12 +976,12 @@ class PositionsPage(QWidget):
     def save_positions(self):
         """保存 positions 檔案（含備份和合併）"""
         try:
-            # 1. 創建備份
-            if os.path.exists(POSITIONS_FILE):
-                backup_path = create_backup_filename(POSITIONS_FILE)
-                import shutil
-                shutil.copy2(POSITIONS_FILE, backup_path)
-                logger.info(f"已創建備份: {backup_path}")
+            # 1. 創建備份 (已停用)
+            # if os.path.exists(POSITIONS_FILE):
+            #     backup_path = create_backup_filename(POSITIONS_FILE)
+            #     import shutil
+            #     shutil.copy2(POSITIONS_FILE, backup_path)
+            #     logger.info(f"已創建備份: {backup_path}")
 
             # 2. 讀取既有檔案
             merged = {}
@@ -1146,16 +993,13 @@ class PositionsPage(QWidget):
             for key in ["version", "description", "screen", "roi", "validation"]:
                 merged[key] = self.positions.get(key, merged.get(key, {}))
 
-            # 4. 合併 points（只覆蓋變更的鍵位）
-            merged_points = merged.get("points", {})
-            for k, v in self.positions.get("points", {}).items():
-                merged_points[k] = v
-            merged["points"] = merged_points
+            # 4. 完全覆蓋 points（不保留舊資料）
+            merged["points"] = self.positions.get("points", {}).copy()
 
             # 5. 添加 metadata 與測試設定
             merged.setdefault("meta", {})
             merged["meta"]["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            merged["meta"]["total_keys"] = len(merged_points)
+            merged["meta"]["total_keys"] = len(merged["points"])
             merged["meta"]["test_mode"] = self.test_mode
             merged["meta"]["test_delay_ms"] = self.step_delay_ms
 

@@ -32,7 +32,7 @@ class Toast(QWidget):
             border-radius: 8px;
             padding: 12px 16px;
             font-weight: 500;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            border: 2px solid rgba(255, 255, 255, 0.2);
         """
 
         self.setStyleSheet(styles.get(toast_type, styles["info"]) + base_style)

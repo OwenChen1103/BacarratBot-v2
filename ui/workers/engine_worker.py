@@ -91,7 +91,6 @@ class NDJSONPlayer:
 class EngineWorker(QThread):
     # 重要: 這些 signals 對應 Dashboard 期待的接口
     state_changed = Signal(str)
-    plan_ready = Signal(dict)
     session_stats = Signal(dict)
     risk_alert = Signal(str, str)
     log_message = Signal(str, str, str)
@@ -107,13 +106,23 @@ class EngineWorker(QThread):
         self._round_count = 0
         self._net_profit = 0
         self._last_winner = None
+        self._detection_state = "waiting"  # waiting, detecting, betting_open, betting_closed
+        self._last_detection_error = None  # 最後的檢測錯誤信息
 
     def initialize_engine(self, dry_run: bool = True) -> bool:
-        """初始化引擎（不載入配置，等啟動時再載入）"""
+        """初始化引擎並載入配置"""
         try:
             self.engine = AutoBetEngine(dry_run=dry_run)
             self._dry_run = dry_run
-            self._emit_log("INFO", "Engine", "引擎已初始化 - 等待配置載入")
+            self._emit_log("INFO", "Engine", "引擎已初始化")
+
+            # 立即載入配置，讓檢測器可以工作
+            if self._load_real_configs():
+                self._emit_log("INFO", "Engine", "✅ 配置載入成功，檢測器已準備就緒")
+                # 配置載入成功，但保持待機狀態 (不自動啟用檢測)
+                # self._enabled 保持 False，等待用戶手動啟動
+            else:
+                self._emit_log("WARNING", "Engine", "⚠️ 配置載入失敗，檢測器未就緒")
 
             # 開始狀態輪詢
             self._tick_running = True
@@ -129,11 +138,24 @@ class EngineWorker(QThread):
 
     def run(self):
         """QThread.run() - 狀態監控迴圈"""
+        self._emit_log("INFO", "Thread", f"EngineWorker.run() 開始執行，_tick_running={getattr(self, '_tick_running', None)}")
+
+        # 等待初始化完成（等待 _tick_running 變為 True）
+        while not getattr(self, '_tick_running', False):
+            self.msleep(50)
+
+        self._emit_log("INFO", "Thread", f"EngineWorker 初始化完成，開始主迴圈")
+
         while self._tick_running:
             try:
                 # 始終發送狀態更新，不管引擎是否啟用
                 current_state = "running" if self._enabled else "idle"
                 self.state_changed.emit(current_state)
+
+                # 狀態日誌 (僅在啟動時顯示一次)
+                if not hasattr(self, '_initial_status_logged'):
+                    self._emit_log("INFO", "Status", f"EngineWorker狀態: enabled={self._enabled}, engine={bool(self.engine)}")
+                    self._initial_status_logged = True
 
                 # 模擬統計數據
                 self.session_stats.emit({
@@ -144,6 +166,30 @@ class EngineWorker(QThread):
                     "dry_run": self._dry_run,
                 })
 
+                # 不再自動生成計畫，由用戶在 dashboard 設定點擊順序
+
+                # 檢測 overlay 狀態（如果引擎已啟動）
+                detection_condition = self._enabled and self.engine
+
+                # 檢測條件日誌（僅在狀態改變時）
+                if not hasattr(self, '_last_detection_condition') or self._last_detection_condition != detection_condition:
+                    self._emit_log("INFO", "Detection", f"檢測條件變更: enabled={self._enabled}, engine={bool(self.engine)}, 執行檢測={detection_condition}")
+                    self._last_detection_condition = detection_condition
+
+                if detection_condition:
+                    self._update_detection_state()
+                else:
+                    # 添加狀態日誌來診斷為什麼不檢測
+                    if not self._enabled:
+                        # 只在狀態改變時記錄，避免過多日誌
+                        if getattr(self, '_last_log_enabled', None) != self._enabled:
+                            self._emit_log("INFO", "Detection", f"引擎未啟用 (_enabled={self._enabled})")
+                            self._last_log_enabled = self._enabled
+                    elif not self.engine:
+                        if getattr(self, '_last_log_engine', None) != bool(self.engine):
+                            self._emit_log("INFO", "Detection", f"引擎物件為空 (engine={self.engine})")
+                            self._last_log_engine = bool(self.engine)
+
                 # 發送引擎狀態
                 status = {
                     "current_state": current_state,
@@ -151,14 +197,22 @@ class EngineWorker(QThread):
                     "dry_run": self._dry_run,
                     "rounds": getattr(self, '_round_count', 0),
                     "net": getattr(self, '_net_profit', 0),
-                    "last_winner": getattr(self, '_last_winner', None)
+                    "last_winner": getattr(self, '_last_winner', None),
+                    "detection_state": self._detection_state,
+                    "detection_error": getattr(self, '_last_detection_error', None)
                 }
                 self.engine_status.emit(status)
 
             except Exception as e:
                 self._emit_log("ERROR", "Status", f"狀態檢查錯誤: {e}")
 
-            self.msleep(200)
+            # 根據檢測狀態調整檢測頻率
+            if self._detection_state == "betting_closed":
+                # 停止下注時，降低檢測頻率以節省資源
+                self.msleep(500)  # 500ms
+            else:
+                # 可下注或等待時，保持較高頻率
+                self.msleep(200)  # 200ms
 
     def start_engine(self, mode: str = "simulation", **kwargs) -> bool:
         """啟動引擎
@@ -170,9 +224,12 @@ class EngineWorker(QThread):
             return False
 
         try:
-            # 載入實際配置
-            if not self._load_real_configs():
-                return False
+            # 檢查是否需要重新載入配置（如果已經載入過就跳過）
+            if not hasattr(self.engine, 'overlay') or not self.engine.overlay:
+                if not self._load_real_configs():
+                    return False
+            else:
+                self._emit_log("INFO", "Engine", "配置已載入，跳過重複載入")
 
             # 設定模式
             self._is_simulation = (mode == "simulation")
@@ -202,6 +259,10 @@ class EngineWorker(QThread):
     def _load_real_configs(self) -> bool:
         """載入真實的配置檔案"""
         try:
+            # 載入 UI 配置 (空字典，使用預設值)
+            self.engine.load_ui_config({})
+            self._emit_log("INFO", "Config", "✅ UI 配置載入完成（使用預設值）")
+
             # 載入 positions.json
             if os.path.exists("configs/positions.json"):
                 success = self.engine.load_positions("configs/positions.json")
@@ -231,6 +292,13 @@ class EngineWorker(QThread):
                 return False
 
             self._emit_log("INFO", "Engine", "✅ 引擎組件初始化成功")
+
+            # 檢查 overlay 是否正確初始化
+            if hasattr(self.engine, 'overlay') and self.engine.overlay:
+                self._emit_log("INFO", "Config", "✅ Overlay 檢測器已初始化")
+            else:
+                self._emit_log("WARNING", "Config", "⚠️ Overlay 檢測器初始化失敗")
+
             return True
 
         except Exception as e:
@@ -239,6 +307,7 @@ class EngineWorker(QThread):
 
     def stop_engine(self):
         self._enabled = False
+        self._detection_state = "waiting"  # 重置檢測狀態
         if self.engine:
             try:
                 self.engine.set_enabled(False)
@@ -296,6 +365,69 @@ class EngineWorker(QThread):
 
         except Exception as e:
             self._emit_log("ERROR", "Events", f"事件處理錯誤: {e}")
+
+    def _update_detection_state(self):
+        """更新檢測狀態"""
+        try:
+            # 只在調試時顯示
+            # self._emit_log("DEBUG", "Detection", "=== 開始檢測狀態更新 ===")
+
+            if not self.engine:
+                if self._detection_state != "waiting":
+                    self._detection_state = "waiting"
+                    self._emit_log("INFO", "Detection", "Engine not available")
+                return
+
+            if not hasattr(self.engine, 'overlay'):
+                if self._detection_state != "waiting":
+                    self._detection_state = "waiting"
+                    self._emit_log("INFO", "Detection", "Engine has no overlay attribute")
+                return
+
+            overlay = self.engine.overlay
+            if not overlay:
+                if self._detection_state != "waiting":
+                    self._detection_state = "waiting"
+                    self._emit_log("INFO", "Detection", "Overlay detector is None")
+                return
+
+            # 只在首次時記錄 overlay 類型
+            if not hasattr(self, '_overlay_type_logged'):
+                self._emit_log("INFO", "Detection", f"Overlay 類型: {type(overlay).__name__}")
+                self._overlay_type_logged = True
+
+            # 直接檢測當前狀態
+            try:
+                is_open = overlay.overlay_is_open()
+
+                if is_open:
+                    if self._detection_state != "betting_open":
+                        self._detection_state = "betting_open"
+                        self._emit_log("INFO", "Detection", "✅ 檢測到可下注狀態")
+                    else:
+                        self._emit_log("DEBUG", "Detection", "持續可下注狀態")
+                else:
+                    if self._detection_state != "betting_closed":
+                        self._detection_state = "betting_closed"
+                        self._emit_log("INFO", "Detection", "🔴 檢測到停止下注狀態")
+                    else:
+                        self._emit_log("DEBUG", "Detection", "持續停止下注狀態")
+
+                # 清除錯誤信息（檢測成功）
+                self._last_detection_error = None
+
+            except Exception as e:
+                self._detection_state = "betting_closed"
+                self._emit_log("ERROR", "Detection", f"Overlay 檢測異常，回退到 CLOSED: {e}")
+                self._emit_log("ERROR", "Detection", f"異常堆疊: {e.__class__.__name__}: {str(e)}")
+                # 存儲錯誤信息供 UI 顯示
+                self._last_detection_error = str(e)
+
+        except Exception as e:
+            self._detection_state = "betting_closed"
+            self._emit_log("ERROR", "Detection", f"狀態更新錯誤: {e}")
+            self._last_detection_error = str(e)
+
 
     def _emit_log(self, level: str, module: str, msg: str):
         self.log_message.emit(level, module, msg)

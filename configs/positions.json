@@ -6,11 +6,25 @@
     "height": 1080,
     "dpi_scale": 1.0
   },
+  "points": {
+    "banker": {
+      "x": 534,
+      "y": 564
+    },
+    "chip_1k": {
+      "x": 840,
+      "y": 816
+    },
+    "confirm": {
+      "x": 1242,
+      "y": 822
+    }
+  },
   "roi": {
     "overlay": {
-      "x": 326,
-      "y": 527,
-      "w": 116,
+      "x": 233,
+      "y": 547,
+      "w": 117,
       "h": 30
     },
     "player_stack": {
@@ -32,31 +46,17 @@
       "h": 60
     },
     "timer": {
-      "x": 568,
-      "y": 576,
-      "w": 46,
-      "h": 50
+      "x": 500,
+      "y": 200,
+      "w": 100,
+      "h": 100
     }
   },
   "validation": {
     "min_click_gap_ms": 40
   },
-  "points": {
-    "banker": {
-      "x": 425,
-      "y": 729
-    },
-    "chip_1k": {
-      "x": 107,
-      "y": 817
-    },
-    "confirm": {
-      "x": 425,
-      "y": 820
-    }
-  },
   "meta": {
-    "last_updated": "2025-09-28T03:43:51Z",
+    "last_updated": "2025-09-28T07:07:55Z",
     "total_keys": 3,
     "test_mode": "move",
     "test_delay_ms": 2000
@@ -77,5 +77,10 @@
     },
     "source_mode": "screen",
     "last_image_path": null
-  }
+  },
+  "click_sequence": [
+    "chip_1k",
+    "banker",
+    "confirm"
+  ]
 }

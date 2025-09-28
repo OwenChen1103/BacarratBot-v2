@@ -10,16 +10,26 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# 確認載入檔案位置
+logger.warning("detectors.py LOADED from: %s", __file__)
+
 class OverlayDetector:
     def __init__(self, ui_cfg: Dict, positions: Dict):
         self.ui = ui_cfg or {}
         self.pos = positions or {}
         self._last_state = False
         self._streak = 0
-        self._need = int(self.ui.get("overlay", {}).get("consecutive_required", 2))
+
+        # 優先從 positions 的 overlay_params 讀取配置，否則回退到 ui
+        overlay_params = self.pos.get("overlay_params", {})
+        ui_overlay = self.ui.get("overlay", {})
+        self._need = int(overlay_params.get("consecutive_required", ui_overlay.get("consecutive_required", 2)))
 
     def overlay_is_open(self) -> bool:
-        o = self.ui.get("overlay", {})
+        # 優先從 positions 的 overlay_params 讀取配置
+        overlay_params = self.pos.get("overlay_params", {})
+        ui_overlay = self.ui.get("overlay", {})
+
         roi = self.pos.get("roi", {}).get("overlay", None)
         if not roi:
             logger.warning("overlay ROI missing")
@@ -29,7 +39,9 @@ class OverlayDetector:
         arr = np.array(shot)
         gray = (0.299*arr[:,:,0] + 0.587*arr[:,:,1] + 0.114*arr[:,:,2]).astype(np.float32)
         mean = float(np.mean(gray))
-        open_lt = float(o.get("gray_open_lt", 120.0))
+
+        # 使用 overlay_params 或回退到 ui 配置
+        open_lt = float(overlay_params.get("gray_open_lt", ui_overlay.get("gray_open_lt", 120.0)))
         cur = (mean < open_lt)  # 較暗＝下注開放
         if cur == self._last_state:
             self._streak += 1
@@ -805,11 +817,16 @@ class OverlayDetectorWrapper:
         # 3) 合併：defaults <- ui <- positions
         cfg = {**defaults, **ui_overlay, **pos_thresh}
 
-        self.detector = ProductionOverlayDetector(cfg)
-        logger.info(
-            "Overlay cfg: open_th=%.2f, close_th=%.2f, k_open=%d, k_close=%d, green=%s",
-            cfg["open_threshold"], cfg["close_threshold"], cfg["k_open"], cfg["k_close"], cfg["green_hue_range"]
-        )
+        try:
+            self.detector = ProductionOverlayDetector(cfg)
+            logger.info(
+                "Overlay cfg: open_th=%.2f, close_th=%.2f, k_open=%d, k_close=%d, green=%s",
+                cfg["open_threshold"], cfg["close_threshold"], cfg["k_open"], cfg["k_close"], cfg["green_hue_range"]
+            )
+        except Exception as e:
+            logger.error(f"Failed to create ProductionOverlayDetector: {e}")
+            # 創建一個簡單的 fallback 檢測器
+            self.detector = self._create_fallback_detector()
 
         # 設定 ROI
         overlay_roi = self.pos.get("roi", {}).get("overlay", None)
@@ -830,6 +847,34 @@ class OverlayDetectorWrapper:
         self._last_frame_time = 0
         self._frame_interval = 0.12  # 120ms
 
+    def _clamp_roi(self, roi):
+        """夾住ROI到螢幕邊界內"""
+        import pyautogui
+        sw, sh = pyautogui.size()
+        x = max(0, min(roi["x"], sw - 1))
+        y = max(0, min(roi["y"], sh - 1))
+        w = max(1, min(roi["w"], sw - x))
+        h = max(1, min(roi["h"], sh - y))
+        return {"x": x, "y": y, "w": w, "h": h}
+
+    def _create_fallback_detector(self):
+        """創建簡單的回退檢測器"""
+        class FallbackDetector:
+            def overlay_is_open(self):
+                return False
+            def process_frame(self, frame):
+                return {"is_open": False, "decision": "UNKNOWN"}
+        return FallbackDetector()
+
+    def health_check(self) -> tuple:
+        """截圖健康檢查"""
+        try:
+            import pyautogui
+            img = pyautogui.screenshot(region=(0, 0, 1, 1))
+            return (img is not None), ""
+        except Exception as e:
+            return False, f"screenshot permission/compat error: {e}"
+
     def overlay_is_open(self) -> bool:
         """引擎調用的主要接口"""
         try:
@@ -838,15 +883,23 @@ class OverlayDetectorWrapper:
             # 控制檢測頻率（避免過度頻繁）
             if current_time - self._last_frame_time < self._frame_interval:
                 # 太頻繁，直接返回上次狀態
-                return self.detector.overlay_is_open()
+                try:
+                    result = self.detector.overlay_is_open()
+                    return result
+                except Exception as e:
+                    logger.warning(f"Detector overlay_is_open failed: {e}")
+                    return False
 
             self._last_frame_time = current_time
 
             # 截取當前畫面並處理
             roi = self.pos.get("roi", {}).get("overlay", None)
             if not roi:
-                logger.warning("overlay ROI missing")
+                logger.warning("overlay_is_open: overlay ROI missing")
                 return False
+
+            # 夾住ROI到螢幕邊界內
+            roi = self._clamp_roi(roi)
 
             x, y, w, h = roi["x"], roi["y"], roi["w"], roi["h"]
             shot = pyautogui.screenshot(region=(x, y, w, h))
@@ -869,10 +922,15 @@ class OverlayDetectorWrapper:
             # 處理幀並更新狀態
             result = self.detector.process_frame(full_frame)
 
-            return result.get("is_open", False)
+            is_open = result.get("is_open", False)
+
+            # 釋放記憶體
+            del full_frame, full_arr, shot, arr
+
+            return is_open
 
         except Exception as e:
-            logger.error(f"OverlayDetectorWrapper error: {e}")
+            logger.error(f"OverlayDetectorWrapper error: {e}", exc_info=True)
             return False
 
 

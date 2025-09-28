@@ -6,12 +6,22 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QFrame, QTextEdit, QGroupBox,
     QProgressBar, QComboBox, QCheckBox, QSpinBox,
     QMessageBox, QInputDialog, QTableWidget, QTableWidgetItem,
-    QHeaderView, QSplitter, QTabWidget
+    QHeaderView, QSplitter, QTabWidget, QScrollArea
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QTextCursor, QColor, QPalette
 
 from ..workers.engine_worker import EngineWorker
+
+class NoWheelComboBox(QComboBox):
+    """禁用滾輪的 ComboBox"""
+    def wheelEvent(self, event):
+        # 完全忽略滾輪事件，除非按住 Ctrl 鍵
+        from PySide6.QtGui import QGuiApplication
+        if QGuiApplication.keyboardModifiers() & Qt.ControlModifier:
+            super().wheelEvent(event)
+        else:
+            event.ignore()
 
 class StatusCard(QFrame):
     """狀態卡片"""
@@ -19,6 +29,7 @@ class StatusCard(QFrame):
         super().__init__()
         self.title = title
         self.icon = icon
+        self.is_detection_card = (title == "檢測狀態")
         self.setup_ui()
 
     def setup_ui(self):
@@ -46,7 +57,20 @@ class StatusCard(QFrame):
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
 
-        # 內容
+        # 內容區域（用一個 Frame 包裝，這樣可以單獨設置邊框）
+        self.content_frame = QFrame()
+        self.content_frame.setStyleSheet("""
+            QFrame {
+                background-color: transparent;
+                border: 1px solid #4b5563;
+                border-radius: 6px;
+                padding: 8px;
+            }
+        """)
+
+        content_layout = QVBoxLayout(self.content_frame)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
         self.content_label = QLabel("待機中...")
         self.content_label.setAlignment(Qt.AlignCenter)
         # 使用支援 emoji 的字體
@@ -54,13 +78,40 @@ class StatusCard(QFrame):
         content_font.setStyleStrategy(QFont.PreferAntialias)
         self.content_label.setFont(content_font)
 
-        layout.addLayout(header_layout)
-        layout.addWidget(self.content_label)
+        content_layout.addWidget(self.content_label)
 
-    def update_content(self, content: str, color: str = "#ffffff"):
+        layout.addLayout(header_layout)
+        layout.addWidget(self.content_frame)
+
+    def update_content(self, content: str, color: str = "#ffffff", show_border: bool = False):
         """更新內容"""
         self.content_label.setText(content)
-        self.content_label.setStyleSheet(f"color: {color};")
+        # 確保內層標籤沒有邊框，只有文字顏色
+        self.content_label.setStyleSheet(f"""
+            color: {color};
+            border: none;
+            background: transparent;
+        """)
+
+        # 檢測狀態卡片的綠色邊框效果（只應用到內容區域）
+        if self.is_detection_card and show_border:
+            self.content_frame.setStyleSheet("""
+                QFrame {
+                    background-color: transparent;
+                    border: 2px solid #10b981;
+                    border-radius: 6px;
+                    padding: 8px;
+                }
+            """)
+        else:
+            self.content_frame.setStyleSheet("""
+                QFrame {
+                    background-color: transparent;
+                    border: 1px solid #4b5563;
+                    border-radius: 6px;
+                    padding: 8px;
+                }
+            """)
 
 class LogViewer(QFrame):
     """日誌檢視器"""
@@ -163,10 +214,14 @@ class LogViewer(QFrame):
         """清除日誌"""
         self.log_text.clear()
 
-class PlanCard(QFrame):
-    """下注計畫卡片"""
+class ClickSequenceCard(QFrame):
+    """點擊順序設定卡片"""
+    sequence_changed = Signal(list)
+
     def __init__(self):
         super().__init__()
+        self.enabled_positions = []
+        self.sequence_combos = []
         self.setup_ui()
 
     def setup_ui(self):
@@ -182,43 +237,275 @@ class PlanCard(QFrame):
 
         layout = QVBoxLayout(self)
 
-        title = QLabel("🎯 下注計畫")
+        # 標題
+        title = QLabel("🎯 點擊順序設定")
         title.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
         layout.addWidget(title)
 
-        self.plan_text = QTextEdit()
-        self.plan_text.setReadOnly(True)
-        self.plan_text.setMaximumHeight(120)
-        self.plan_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #2b2b2b;
-                border: 1px solid #404040;
+        # 說明
+        info = QLabel("根據已設定的位置（✓）設定點擊順序：")
+        info.setStyleSheet("color: #9ca3af; font-size: 9pt;")
+        layout.addWidget(info)
+
+        # 刷新按鈕
+        refresh_btn = QPushButton("🔄 刷新位置")
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3b82f6;
+                color: white;
+                border: none;
+                padding: 4px 8px;
                 border-radius: 4px;
-                font-family: 'Consolas', monospace;
+                font-weight: bold;
                 font-size: 9pt;
             }
+            QPushButton:hover {
+                background-color: #2563eb;
+            }
         """)
-        self.plan_text.setText("等待下注計畫...")
+        refresh_btn.clicked.connect(self.refresh_positions)
+        layout.addWidget(refresh_btn)
 
-        layout.addWidget(self.plan_text)
+        # 滾動區域包裝器
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setMaximumHeight(300)  # 限制最大高度
+        scroll_area.setMinimumHeight(120)  # 設置最小高度
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid #4b5563;
+                border-radius: 6px;
+                background-color: #1f2937;
+                padding: 4px;
+            }
+            QScrollBar:vertical {
+                background-color: #4b5563;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #6b7280;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #9ca3af;
+            }
+        """)
 
-    def update_plan(self, plan_data: dict):
-        """更新下注計畫"""
-        if not plan_data:
-            self.plan_text.setText("無計畫資料")
+        # 序列容器 widget
+        self.sequence_widget = QWidget()
+        self.sequence_container = QVBoxLayout(self.sequence_widget)
+        self.sequence_container.setContentsMargins(8, 8, 8, 8)
+        self.sequence_container.setSpacing(8)
+
+        scroll_area.setWidget(self.sequence_widget)
+        layout.addWidget(scroll_area)
+
+        # 保存按鈕
+        save_btn = QPushButton("💾 保存順序")
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #059669;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #047857;
+            }
+        """)
+        save_btn.clicked.connect(self.save_sequence)
+        layout.addWidget(save_btn)
+
+        # 初始顯示
+        self.update_no_data_message()
+
+    def update_no_data_message(self):
+        """顯示無資料訊息"""
+        # 清空容器
+        self.clear_sequence_container()
+
+        no_data = QLabel("📝 請先在「位置校準」頁面設定位置")
+        no_data.setStyleSheet("""
+            QLabel {
+                color: #6b7280;
+                font-style: italic;
+                padding: 20px;
+                text-align: center;
+            }
+        """)
+        no_data.setAlignment(Qt.AlignCenter)
+        self.sequence_container.addWidget(no_data)
+
+    def update_enabled_positions(self, positions_data: dict):
+        """更新可用的位置（使用 ✓/✗ 狀態判斷）"""
+        if not positions_data:
+            self.update_no_data_message()
             return
 
-        # 格式化計畫顯示
-        formatted_plan = "📋 本輪下注計畫：\n\n"
+        points = positions_data.get("points", {})
+        # 只包含有座標的 position（✓ 狀態）
+        available_points = {k: v for k, v in points.items()
+                           if "x" in v and "y" in v}
 
-        total_amount = 0
-        for target, amount in plan_data.items():
-            formatted_plan += f"• {target}: {amount:,} 元\n"
-            total_amount += amount
+        if not available_points:
+            self.update_no_data_message()
+            return
 
-        formatted_plan += f"\n💰 總金額: {total_amount:,} 元"
+        self.enabled_positions = list(available_points.keys())
+        self.build_sequence_interface()
 
-        self.plan_text.setText(formatted_plan)
+    def clear_sequence_container(self):
+        """清空序列容器"""
+        while self.sequence_container.count():
+            child = self.sequence_container.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+    def build_sequence_interface(self):
+        """建立序列設定界面"""
+        self.clear_sequence_container()
+        self.sequence_combos = []
+
+        # 載入現有順序
+        current_sequence = self.load_current_sequence()
+
+        action_descriptions = {
+            "banker": "點擊莊家",
+            "player": "點擊閒家",
+            "tie": "點擊和局",
+            "chip_1k": "選擇 1K 籌碼",
+            "chip_5k": "選擇 5K 籌碼",
+            "chip_10k": "選擇 10K 籌碼",
+            "chip_100": "選擇 100 籌碼",
+            "confirm": "確認下注",
+            "cancel": "取消下注"
+        }
+
+        for i, position in enumerate(self.enabled_positions):
+            # 步驟標籤
+            step_layout = QHBoxLayout()
+
+            step_label = QLabel(f"步驟 {i+1}:")
+            step_label.setFixedWidth(80)
+            step_label.setStyleSheet("font-weight: bold; color: #f3f4f6; font-size: 10pt;")
+
+            # 下拉選單（禁用滾輪）
+            combo = NoWheelComboBox()
+            combo.setFocusPolicy(Qt.StrongFocus)  # 只有點擊時才能獲得焦點
+            combo.addItem("-- 請選擇動作 --", "")
+
+            for pos in self.enabled_positions:
+                desc = action_descriptions.get(pos, f"點擊 {pos}")
+                combo.addItem(desc, pos)
+
+            # 設定當前值
+            if i < len(current_sequence) and current_sequence[i] in self.enabled_positions:
+                index = combo.findData(current_sequence[i])
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+            combo.setStyleSheet("""
+                QComboBox {
+                    background-color: #1f2937;
+                    color: #f3f4f6;
+                    border: 1px solid #4b5563;
+                    border-radius: 4px;
+                    padding: 6px 12px;
+                    min-height: 28px;
+                    font-size: 10pt;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                }
+                QComboBox::down-arrow {
+                    border: none;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #1f2937;
+                    color: #f3f4f6;
+                    selection-background-color: #3b82f6;
+                    border: 1px solid #4b5563;
+                }
+            """)
+
+            self.sequence_combos.append(combo)
+
+            step_layout.addWidget(step_label)
+            step_layout.addWidget(combo)
+
+            self.sequence_container.addLayout(step_layout)
+
+    def load_current_sequence(self) -> list:
+        """載入當前保存的順序"""
+        try:
+            import json
+            if os.path.exists("configs/positions.json"):
+                with open("configs/positions.json", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return data.get("click_sequence", [])
+        except:
+            pass
+        return []
+
+    def save_sequence(self):
+        """保存點擊順序"""
+        sequence = []
+        for combo in self.sequence_combos:
+            selected = combo.currentData()
+            if selected:  # 不是空選項
+                sequence.append(selected)
+
+        # 檢查是否有重複
+        if len(sequence) != len(set(sequence)):
+            QMessageBox.warning(self, "順序錯誤", "不能有重複的動作，請檢查設定！")
+            return
+
+        # 保存到配置檔
+        try:
+            import json
+            if os.path.exists("configs/positions.json"):
+                with open("configs/positions.json", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                data["click_sequence"] = sequence
+
+                with open("configs/positions.json", "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+
+                # 發送信號
+                self.sequence_changed.emit(sequence)
+
+                # 顯示成功訊息
+                QMessageBox.information(self, "保存成功",
+                    f"點擊順序已保存：\n{' → '.join(sequence)}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "保存失敗", f"無法保存設定：{e}")
+
+    def refresh_positions(self):
+        """刷新位置資料"""
+        try:
+            import json
+            if os.path.exists("configs/positions.json"):
+                with open("configs/positions.json", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.update_enabled_positions(data)
+
+                # 顯示刷新成功訊息
+                from ..app_state import emit_toast
+                emit_toast("位置資料已刷新", "success")
+            else:
+                from ..app_state import emit_toast
+                emit_toast("找不到位置配置檔", "warning")
+        except Exception as e:
+            from ..app_state import emit_toast
+            emit_toast(f"刷新失敗: {e}", "error")
 
 class StatsCard(QFrame):
     """統計卡片"""
@@ -340,10 +627,10 @@ class DashboardPage(QWidget):
         right_layout = QVBoxLayout(right_frame)
         right_layout.setContentsMargins(4, 4, 4, 4)
 
-        self.plan_card = PlanCard()
+        self.click_sequence_card = ClickSequenceCard()
         self.stats_card = StatsCard()
 
-        right_layout.addWidget(self.plan_card)
+        right_layout.addWidget(self.click_sequence_card)
         right_layout.addWidget(self.stats_card)
         right_layout.addStretch()
 
@@ -370,11 +657,11 @@ class DashboardPage(QWidget):
         # 狀態顯示卡片
         self.state_card = StatusCard("引擎狀態", "🤖")
         self.mode_card = StatusCard("運行模式", "🧪")
-        self.events_card = StatusCard("事件來源", "📡")
+        self.detection_card = StatusCard("檢測狀態", "🎯")
 
         control_layout.addWidget(self.state_card, 0, 0)
         control_layout.addWidget(self.mode_card, 0, 1)
-        control_layout.addWidget(self.events_card, 0, 2)
+        control_layout.addWidget(self.detection_card, 0, 2)
 
         # 控制按鈕
         button_layout = QHBoxLayout()
@@ -463,6 +750,9 @@ class DashboardPage(QWidget):
         self.engine_worker.log_message.connect(self.on_log_message)
         self.engine_worker.engine_status.connect(self.on_engine_status)
 
+        # 連接點擊順序卡片信號
+        self.click_sequence_card.sequence_changed.connect(self.on_sequence_changed)
+
         # 啟動工作執行緒
         self.engine_worker.start()
 
@@ -475,7 +765,10 @@ class DashboardPage(QWidget):
 
         # 設定初始狀態
         self.mode_card.update_content("⏸ 待機中", "#6b7280")
-        self.events_card.update_content("🎯 Overlay 檢測", "#10b981")
+        self.detection_card.update_content("● 等待啟動", "#6b7280", False)
+
+        # 載入 positions 數據
+        self.load_positions_data()
 
     def start_simulation(self):
         """啟動模擬實戰模式"""
@@ -494,6 +787,7 @@ class DashboardPage(QWidget):
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.mode_card.update_content("🎯 模擬實戰中", "#0284c7")
+            self.detection_card.update_content("檢測中", "#f59e0b", False)
             self.start_time = self.get_current_time()
 
             # 啟動運行時間計時器
@@ -535,6 +829,7 @@ class DashboardPage(QWidget):
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.mode_card.update_content("⚡ 實戰進行中", "#dc2626")
+            self.detection_card.update_content("檢測中", "#f59e0b", False)
             self.start_time = self.get_current_time()
 
             # 啟動運行時間計時器
@@ -558,9 +853,18 @@ class DashboardPage(QWidget):
             QMessageBox.warning(self, "配置缺失", "未找到 strategy.json\n請先完成策略設定！")
             return False
 
-        # 檢查模板
-        if not os.path.exists("templates") or not any(f.endswith('.png') for f in os.listdir("templates")):
-            QMessageBox.warning(self, "配置缺失", "未找到模板文件\n請先設定檢測模板！")
+        # 檢查模板路徑（在 positions.json 的 overlay_params 中）
+        try:
+            with open("configs/positions.json", "r", encoding="utf-8") as f:
+                pos_data = json.load(f)
+            template_paths = pos_data.get("overlay_params", {}).get("template_paths", {})
+            qing_path = template_paths.get("qing")
+
+            if not qing_path or not os.path.exists(qing_path):
+                QMessageBox.warning(self, "配置缺失", "未設定檢測模板或模板文件不存在\n請先在「可下注判斷」頁面設定模板！")
+                return False
+        except:
+            QMessageBox.warning(self, "配置缺失", "無法讀取模板配置\n請先完成 Overlay 設定！")
             return False
 
         return True
@@ -577,6 +881,7 @@ class DashboardPage(QWidget):
 
         # 重置模式顯示
         self.mode_card.update_content("⏸ 已停止", "#6b7280")
+        self.detection_card.update_content("● 已停止", "#6b7280", False)
 
         if hasattr(self, 'runtime_timer'):
             self.runtime_timer.stop()
@@ -619,14 +924,47 @@ class DashboardPage(QWidget):
 
     def on_engine_status(self, status):
         """引擎狀態更新"""
-        # 更新事件來源狀態
-        if hasattr(self.engine_worker, 'event_feeder') and self.engine_worker.event_feeder:
-            if hasattr(self.engine_worker.event_feeder, 'is_running') and self.engine_worker.event_feeder.is_running():
-                self.events_card.update_content("● 已連接", "#10b981")
+        # 更新檢測狀態（基於引擎狀態）
+        current_state = status.get("current_state", "idle")
+        enabled = status.get("enabled", False)
+        detection_state = status.get("detection_state", "waiting")  # 新增檢測狀態
+        detection_error = status.get("detection_error")  # 檢測錯誤信息
+
+        if not enabled:
+            self.detection_card.update_content("● 未啟動", "#6b7280", False)
+        elif detection_state == "betting_open":
+            self.detection_card.update_content("可下注", "#10b981", True)
+        elif detection_state == "betting_closed":
+            self.detection_card.update_content("停止下注", "#ef4444", False)
+        elif detection_state == "waiting":
+            if detection_error:
+                # 顯示具體錯誤信息
+                error_short = str(detection_error)[:50] + "..." if len(str(detection_error)) > 50 else str(detection_error)
+                # 特殊處理 ROI 相關錯誤
+                if "ROI" in str(detection_error) or "overlay" in str(detection_error).lower():
+                    self.detection_card.update_content(f"請設定 ROI\n{error_short}", "#f59e0b", False)
+                else:
+                    self.detection_card.update_content(f"檢測錯誤\n{error_short}", "#ef4444", False)
             else:
-                self.events_card.update_content("● 連接中", "#f59e0b")
+                self.detection_card.update_content("等待檢測", "#6b7280", False)
         else:
-            self.events_card.update_content("● 未連接", "#ef4444")
+            # 未知狀態，顯示當前狀態
+            self.detection_card.update_content(f"? {detection_state}", "#6b7280", False)
+
+    def load_positions_data(self):
+        """載入 positions 配置數據"""
+        try:
+            import json
+            if os.path.exists("configs/positions.json"):
+                with open("configs/positions.json", "r", encoding="utf-8") as f:
+                    positions_data = json.load(f)
+                self.click_sequence_card.update_enabled_positions(positions_data)
+        except Exception as e:
+            self.log_viewer.add_log("WARNING", "Dashboard", f"載入 positions 數據失敗: {e}")
+
+    def on_sequence_changed(self, sequence):
+        """點擊順序變更"""
+        self.log_viewer.add_log("INFO", "Dashboard", f"點擊順序已更新: {' → '.join(sequence)}")
 
     def update_runtime(self):
         """更新運行時間"""

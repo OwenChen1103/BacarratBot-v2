@@ -616,6 +616,7 @@ class DashboardPage(QWidget):
         self.detection_active = False
         self.last_decision = None  # 記錄上次決策，防重複觸發
         self.is_triggering = False  # 防止重複觸發標志
+        self._last_counter_log = None  # 節流計數日誌使用
 
         self.setup_ui()
         self.setup_engine()
@@ -1150,8 +1151,16 @@ class DashboardPage(QWidget):
 
             # 添加詳細調試日誌（當綠色護欄通過但未檢測到OPEN時）
             if in_green_gate and decision != 'OPEN':
-                debug_msg = f"綠色護欄✓但未OPEN: NCC={ncc_qing:.3f} (需要≥{self.detector.open_th:.2f}), 計數={open_counter}"
-                self.log_viewer.add_log("DEBUG", "Detection", debug_msg)
+                counter_state = (open_counter, close_counter)
+                if counter_state != self._last_counter_log:
+                    debug_msg = (
+                        f"綠色護欄✓但未OPEN: NCC={ncc_qing:.3f} "
+                        f"(需要≥{self.detector.open_th:.2f}), 計數={open_counter}"
+                    )
+                    self.log_viewer.add_log("DEBUG", "Detection", debug_msg)
+                    self._last_counter_log = counter_state
+            else:
+                self._last_counter_log = None
 
         except Exception as e:
             self.log_viewer.add_log("ERROR", "Detection", f"檢測錯誤: {e}")
@@ -1170,17 +1179,13 @@ class DashboardPage(QWidget):
 
     def _execute_delayed_click_sequence(self):
         """延遲執行點擊序列"""
-        try:
-            if self.engine_worker and self.engine_worker.engine:
-                self.log_viewer.add_log("INFO", "Engine", "✅ 開始執行點擊序列")
-                triggered = self.engine_worker.engine.trigger_if_open()
-                if not triggered:
-                    self.log_viewer.add_log("WARNING", "Engine", "⚠️ 點擊序列執行失敗")
-        except Exception as e:
-            self.log_viewer.add_log("ERROR", "Engine", f"觸發點擊序列錯誤: {e}")
-        finally:
-            # 重置觸發標志（5秒後重置，確保序列執行完成）
-            QTimer.singleShot(5000, self._reset_triggering_flag)
+        if self.engine_worker:
+            self.engine_worker.trigger_click_sequence_async()
+        else:
+            self.log_viewer.add_log("ERROR", "Engine", "觸發點擊序列錯誤: 引擎未初始化")
+
+        # 重置觸發標志（15秒後重置，確保序列執行完成）
+        QTimer.singleShot(15000, self._reset_triggering_flag)
 
     def _reset_triggering_flag(self):
         """重置觸發標志"""

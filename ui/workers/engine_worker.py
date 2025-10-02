@@ -363,12 +363,35 @@ class EngineWorker(QThread):
 
     def force_test_sequence(self):
         """強制測試點擊順序"""
-        if self.engine:
+        if not self.engine:
+            self._emit_log("ERROR", "Test", "引擎未初始化")
+            return
+
+        def _run():
             try:
                 self.engine.force_execute_sequence()
                 self._emit_log("INFO", "Test", "強制執行點擊順序完成")
             except Exception as e:
                 self._emit_log("ERROR", "Test", f"強制執行失敗: {e}")
+
+        threading.Thread(target=_run, name="ForceTestSequence", daemon=True).start()
+
+    def trigger_click_sequence_async(self):
+        """在背景執行點擊序列，避免阻塞 UI 線程"""
+        if not self.engine:
+            self._emit_log("ERROR", "Engine", "引擎未初始化")
+            return
+
+        def _run():
+            self._emit_log("INFO", "Engine", "✅ 開始執行點擊序列")
+            try:
+                triggered = self.engine.trigger_if_open()
+                if not triggered:
+                    self._emit_log("WARNING", "Engine", "⚠️ 點擊序列執行失敗")
+            except Exception as e:
+                self._emit_log("ERROR", "Engine", f"觸發點擊序列錯誤: {e}")
+
+        threading.Thread(target=_run, name="TriggerClickSequence", daemon=True).start()
 
     def quit(self):
         self._tick_running = False

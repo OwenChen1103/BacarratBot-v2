@@ -5,6 +5,7 @@ import time
 import logging
 import cv2
 import numpy as np
+import pyautogui
 from enum import Enum
 from typing import Dict, List, Tuple, Optional
 from collections import deque
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGroupBox, QGridLayout, QTextEdit, QSpinBox, QDoubleSpinBox,
     QCheckBox, QFileDialog, QMessageBox, QFrame, QScrollArea,
-    QSplitter, QProgressBar, QRadioButton, QSizePolicy,
+    QSplitter, QProgressBar, QRadioButton, QSizePolicy, QComboBox,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
     QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsRectItem
 )
@@ -374,6 +375,12 @@ class OverlayPage(QWidget):
         self.fps_buffer = deque(maxlen=30)
         self.fps_last_time = time.time()
 
+        # 多螢幕支援
+        self.selected_screen_index = 0
+        self.screen_combo = None
+        self._screen_refresh_btn = None
+        self._has_screens = False
+
         # ROI 設定
         self.overlay_roi = {"x": 100, "y": 100, "w": 400, "h": 80}
         self.timer_roi = {"x": 500, "y": 200, "w": 100, "h": 100}
@@ -399,8 +406,11 @@ class OverlayPage(QWidget):
         }
 
         self.setup_ui()
+        self.refresh_screen_list()
         self.setup_shortcuts()
+        self.register_screen_signals()
         self.load_positions()
+        self.refresh_screen_list()
         self.init_detection_timer()
 
     def setup_ui(self):
@@ -611,6 +621,33 @@ class OverlayPage(QWidget):
         src_row.addStretch()
         group_layout.addLayout(src_row)
 
+        # 螢幕選擇列（螢幕來源專用）
+        screen_row = QHBoxLayout()
+        screen_row.addWidget(QLabel("螢幕："))
+
+        self.screen_combo = QComboBox()
+        self.screen_combo.setStyleSheet("QComboBox { background: #1f2937; color: white; }")
+        self.screen_combo.currentIndexChanged.connect(self.on_screen_combo_changed)
+        screen_row.addWidget(self.screen_combo)
+
+        self._screen_refresh_btn = QPushButton("重新整理")
+        self._screen_refresh_btn.setStyleSheet("""
+            QPushButton {
+                background: #1f2937;
+                color: #f9fafb;
+                border: 1px solid #374151;
+                padding: 4px 10px;
+                border-radius: 4px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: #111827; }
+        """)
+        self._screen_refresh_btn.clicked.connect(self.refresh_screen_list)
+        screen_row.addWidget(self._screen_refresh_btn)
+
+        screen_row.addStretch()
+        group_layout.addLayout(screen_row)
+
         # 開始/停止按鈕
         btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("🚀 開始檢測")
@@ -666,6 +703,104 @@ class OverlayPage(QWidget):
         group_layout.addLayout(other_btn_layout)
 
         layout.addWidget(group)
+
+    def register_screen_signals(self):
+        """監聽螢幕變更事件"""
+        app = QGuiApplication.instance()
+        if not app:
+            return
+        try:
+            app.screenAdded.connect(self._on_screen_layout_changed)
+            app.screenRemoved.connect(self._on_screen_layout_changed)
+        except Exception:
+            pass
+
+    def _on_screen_layout_changed(self, *_):
+        """處理螢幕布局變更"""
+        self.refresh_screen_list()
+
+    def refresh_screen_list(self):
+        """更新螢幕列表"""
+        if not self.screen_combo:
+            return
+
+        app = QGuiApplication.instance()
+        screens = app.screens() if app else []
+
+        # 記錄現有索引
+        current_index = self.selected_screen_index
+
+        self.screen_combo.blockSignals(True)
+        self.screen_combo.clear()
+
+        self._has_screens = bool(screens)
+
+        if not screens:
+            self.screen_combo.addItem("無可用螢幕")
+            self.screen_combo.setEnabled(False)
+            if self._screen_refresh_btn:
+                self._screen_refresh_btn.setEnabled(False)
+            self.selected_screen_index = 0
+        else:
+            for idx, screen in enumerate(screens):
+                geom = screen.geometry()
+                name = screen.name() or f"Screen {idx+1}"
+                label = f"{idx+1}. {name} ({geom.width()}x{geom.height()})"
+                self.screen_combo.addItem(label)
+
+            if current_index >= len(screens):
+                current_index = len(screens) - 1
+            self.selected_screen_index = max(0, current_index)
+            self.screen_combo.setCurrentIndex(self.selected_screen_index)
+
+            enable_combo = (self.source_mode != "image") and self._has_screens
+            self.screen_combo.setEnabled(enable_combo)
+            if self._screen_refresh_btn:
+                self._screen_refresh_btn.setEnabled(enable_combo)
+
+        self.screen_combo.blockSignals(False)
+
+    def get_selected_screen(self):
+        """取得目前選擇的螢幕"""
+        app = QGuiApplication.instance()
+        if not app:
+            return None
+        screens = app.screens()
+        if not screens:
+            return None
+        index = max(0, min(self.selected_screen_index, len(screens) - 1))
+        return screens[index]
+
+    def on_screen_combo_changed(self, index: int):
+        """螢幕下拉選單變更"""
+        if not self.screen_combo or index < 0:
+            return
+        if index != self.selected_screen_index:
+            self.selected_screen_index = index
+            self.current_frame = None  # 需重新截圖
+            try:
+                text = self.screen_combo.itemText(index)
+            except Exception:
+                text = f"螢幕 {index + 1}"
+            self.log_message(f"螢幕切換為：{text}")
+
+    def _grab_screen_frame(self):
+        """擷取選定螢幕為 BGR frame 與 QPixmap"""
+        screen = self.get_selected_screen()
+        if not screen:
+            raise RuntimeError("找不到可用螢幕")
+
+        geom = screen.geometry()
+        try:
+            shot = pyautogui.screenshot(region=(geom.x(), geom.y(), geom.width(), geom.height()))
+        except Exception as e:
+            raise RuntimeError(f"螢幕截圖失敗: {e}")
+
+        frame = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
+        height, width = frame.shape[:2]
+        qimg = QImage(frame.data, width, height, width * 3, QImage.Format_BGR888).copy()
+        pixmap = QPixmap.fromImage(qimg)
+        return frame, pixmap
 
     def setup_template_controls(self, layout):
         """設定模板控制組"""
@@ -934,19 +1069,11 @@ class OverlayPage(QWidget):
     def capture_screen(self):
         """截取螢幕"""
         try:
-            app = QGuiApplication.instance()
-            screen = app.primaryScreen()
-            screenshot = screen.grabWindow(0)
-
-            # 轉換為 OpenCV 格式
-            qimg = screenshot.toImage()
-            width, height = qimg.width(), qimg.height()
-            ptr = qimg.constBits()
-            arr = np.array(ptr).reshape(height, width, 4)  # RGBA
-            self.current_frame = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+            frame, pixmap = self._grab_screen_frame()
+            self.current_frame = frame
 
             # 更新預覽
-            self.preview.set_pixmap(screenshot)
+            self.preview.set_pixmap(pixmap)
 
             # 更新 ROI 到新預覽
             if hasattr(self.preview, 'roi_items'):
@@ -963,6 +1090,7 @@ class OverlayPage(QWidget):
 
         except Exception as e:
             self.log_message(f"截取螢幕失敗: {e}")
+            QMessageBox.warning(self, "截取失敗", str(e))
 
     def toggle_detection(self):
         """切換檢測狀態"""
@@ -978,6 +1106,10 @@ class OverlayPage(QWidget):
             return
         if self.source_mode == "image" and self.current_frame is None:
             QMessageBox.warning(self, "警告", "請先載入圖片")
+            return
+
+        if self.source_mode == "screen" and not self.get_selected_screen():
+            QMessageBox.warning(self, "警告", "找不到可用螢幕，請重新整理螢幕列表")
             return
 
         # 創建檢測器
@@ -1064,23 +1196,20 @@ class OverlayPage(QWidget):
 
             if self.source_mode == "screen":
                 # 重新截取螢幕（即時檢測）
-                app = QGuiApplication.instance()
-                screen = app.primaryScreen()
-                screenshot = screen.grabWindow(0)
-                qimg = screenshot.toImage()
-                width, height = qimg.width(), qimg.height()
-                ptr = qimg.constBits()
-                arr = np.array(ptr).reshape(height, width, 4)
-                frame = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-                self.current_frame = frame
+                try:
+                    frame, pixmap = self._grab_screen_frame()
+                    self.current_frame = frame
+                except Exception as e:
+                    self.log_message(f"❌ 處理幀失敗: {e}")
+                    return
 
                 # 檢測
-                result = self.detector.process_frame(frame)
+                result = self.detector.process_frame(self.current_frame)
 
                 # 更新預覽與相位
                 phase = result.get("phase_smooth", "UNKNOWN").upper()
                 self.preview.set_current_phase(phase)
-                self.preview.set_pixmap(screenshot)
+                self.preview.set_pixmap(pixmap)
             else:
                 # 圖片模式：直接用現有幀
                 if self.current_frame is None:
@@ -1100,12 +1229,16 @@ class OverlayPage(QWidget):
         except Exception as e:
             self.log_message(f"❌ 處理幀失敗: {e}")
 
-    def set_source_mode(self, mode: str):
+    def set_source_mode(self, _mode: str):
         """切換來源模式"""
         self.source_mode = "image" if self.src_image.isChecked() else "screen"
         is_image = (self.source_mode == "image")
         self.load_image_btn.setEnabled(is_image)
         self.step_btn.setEnabled(is_image)
+        if self.screen_combo:
+            self.screen_combo.setEnabled((not is_image) and self._has_screens)
+        if self._screen_refresh_btn:
+            self._screen_refresh_btn.setEnabled(not is_image)
         self.log_message(f"來源切換為：{self.source_mode}")
 
     def load_image_as_source(self):
@@ -1373,7 +1506,8 @@ class OverlayPage(QWidget):
                 "timer_interval_ms": self.timer_interval_spin.value(),
                 "template_paths": self.template_paths.copy(),
                 "source_mode": self.source_mode,
-                "last_image_path": self.last_image_path
+                "last_image_path": self.last_image_path,
+                "screen_index": self.selected_screen_index
             })
 
             # 保存
@@ -1433,6 +1567,13 @@ class OverlayPage(QWidget):
                     self.template_paths.update(template_paths)
                     self.update_template_status()
 
+                    screen_idx = params.get("screen_index")
+                    if screen_idx is not None:
+                        try:
+                            self.selected_screen_index = max(0, int(screen_idx))
+                        except (ValueError, TypeError):
+                            pass
+
                     # 載入來源模式與圖片路徑
                     self.source_mode = params.get("source_mode", "screen")
                     self.last_image_path = params.get("last_image_path")
@@ -1477,6 +1618,8 @@ class OverlayPage(QWidget):
                     self.preview.roi_items["timer"].setRect(clamp_rect(
                         self.timer_roi["x"], self.timer_roi["y"], self.timer_roi["w"], self.timer_roi["h"]
                     ))
+
+                self.refresh_screen_list()
 
         except Exception as e:
             self.log_message(f"⚠️ 載入配置失敗: {e}")
@@ -1632,11 +1775,13 @@ class OverlayPage(QWidget):
 
         # 檢查螢幕截取功能
         try:
-            app = QGuiApplication.instance()
-            screen = app.primaryScreen()
-            test_screenshot = screen.grabWindow(0, 0, 0, 1, 1)  # 最小截圖測試
-            if test_screenshot.isNull():
-                issues.append("❌ 螢幕截取功能異常")
+            screen = self.get_selected_screen()
+            if not screen:
+                issues.append("❌ 無可用螢幕可供截取")
+            else:
+                test_screenshot = screen.grabWindow(0, 0, 0, 1, 1)  # 最小截圖測試
+                if test_screenshot.isNull():
+                    issues.append("❌ 螢幕截取功能異常")
         except Exception as e:
             issues.append(f"❌ 螢幕截取測試失敗: {e}")
 

@@ -140,14 +140,10 @@ class AutoBetEngine:
 
             elif self.state == "betting_open":
                 if is_open:
-                    logger.info("在 betting_open 狀態，準備執行下注計畫")
-                    # 構建下注計畫並檢查風控
-                    if self._prepare_betting_plan():
-                        self.state = "placing_bets"
-                        self._emit_state_change()
-                        self._execute_betting_plan()
-                    else:
-                        logger.warning("下注計畫準備失敗")
+                    # 停用自動執行，只記錄狀態變化
+                    # 實際執行由 Dashboard 的手動觸發控制
+                    logger.debug("在 betting_open 狀態，等待外部觸發執行")
+                    # 不自動執行，維持 betting_open 狀態
                 else:
                     # 下注期關閉，直接進入 in_round
                     self.state = "in_round"
@@ -247,36 +243,58 @@ class AutoBetEngine:
             logger.warning("沒有下注計畫可執行")
             return
 
-        logger.info(f"開始執行下注計畫: {self.current_plan}")
+        # 防止併發執行檢查
+        if not self._exec_lock.acquire(blocking=False):
+            logger.info("_execute_betting_plan: 已有執行中，跳過重複執行")
+            return
 
-        # 檢查是否是點擊順序（字串列表）
-        if isinstance(self.current_plan, list) and len(self.current_plan) > 0 and isinstance(self.current_plan[0], str):
-            logger.info("使用自定義點擊順序執行")
-            self._execute_click_sequence(self.current_plan)
-        else:
-            logger.info(f"使用策略計畫執行: {len(self.current_plan)} 個動作")
-            for kind, val in self.current_plan:
-                if kind == "chip":
-                    self.act.click_chip_value(int(val))
-                elif kind == "bet":
-                    self.act.click_bet(val)
-                # 在模擬模式下添加短間隔
-                if self.dry:
-                    time.sleep(self.dry_step_delay_ms / 1000.0)
+        try:
+            logger.info(f"開始執行下注計畫: {self.current_plan}")
+
+            # 檢查是否是點擊順序（字串列表）
+            if isinstance(self.current_plan, list) and len(self.current_plan) > 0 and isinstance(self.current_plan[0], str):
+                logger.info("使用自定義點擊順序執行")
+                self._execute_click_sequence(self.current_plan)
+            else:
+                logger.info(f"使用策略計畫執行: {len(self.current_plan)} 個動作")
+                for kind, val in self.current_plan:
+                    if kind == "chip":
+                        self.act.click_chip_value(int(val))
+                    elif kind == "bet":
+                        self.act.click_bet(val)
+                    # 在模擬模式下添加短間隔
+                    if self.dry:
+                        time.sleep(self.dry_step_delay_ms / 1000.0)
+        finally:
+            self._exec_lock.release()
 
     def trigger_if_open(self) -> bool:
         """在檢測到可下注時立即嘗試執行一次（由外部偵測器提示）。
         回傳是否成功觸發執行。"""
         try:
-            # 簡單檢查：只執行點擊順序，不管複雜狀態
-            click_sequence = self.pos.get("click_sequence", [])
-            if not click_sequence:
-                logger.warning("沒有找到點擊順序配置")
+            # 防止併發執行檢查
+            if not self._exec_lock.acquire(blocking=False):
+                logger.info("trigger_if_open: 已有執行中，跳過重複觸發")
                 return False
 
-            logger.info(f"觸發執行點擊順序: {click_sequence}")
-            self._execute_click_sequence(click_sequence)
-            return True
+            try:
+                # 簡單檢查：只執行點擊順序，不管複雜狀態
+                click_sequence = self.pos.get("click_sequence", [])
+                if not click_sequence:
+                    logger.warning("沒有找到點擊順序配置")
+                    return False
+
+                logger.info(f"觸發執行點擊順序: {click_sequence}")
+                self._execute_click_sequence(click_sequence)
+
+                # 執行完成後更新狀態
+                if self.state == "betting_open":
+                    self.state = "placing_bets"
+                    self._emit_state_change()
+
+                return True
+            finally:
+                self._exec_lock.release()
 
         except Exception as e:
             logger.error(f"trigger_if_open 發生錯誤: {e}", exc_info=True)
@@ -287,12 +305,12 @@ class AutoBetEngine:
         logger.info(f"開始執行點擊順序: {' → '.join(sequence)}")
 
         for i, action in enumerate(sequence):
+            # 在模擬模式下，除了第一個步驟外，先延遲再執行（讓步驟間隔明顯）
+            if self.dry and i > 0:
+                time.sleep(self.dry_step_delay_ms / 1000.0)
+
             action_desc = self._get_action_description(action)
             logger.info(f"步驟 {i+1}/{len(sequence)}: {action_desc}")
-
-            # 在模擬模式下先延遲（讓用戶看到步驟提示）
-            if self.dry and i > 0:  # 第一個步驟不延遲
-                time.sleep(self.dry_step_delay_ms / 1000.0)
 
             # 根據動作類型執行相應操作
             if action.startswith("chip_"):
@@ -308,7 +326,7 @@ class AutoBetEngine:
                 self.act.cancel()
             else:
                 logger.warning(f"未知動作: {action}")
-        
+
         logger.info("點擊順序執行完成")
         # 狀態已在 trigger_if_open 中重置
 

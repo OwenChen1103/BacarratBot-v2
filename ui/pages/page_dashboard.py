@@ -1,6 +1,9 @@
 # ui/pages/page_dashboard.py
 import os
 import json
+import time
+import re
+from typing import Any, Dict, Optional, List, Tuple
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QFrame, QTextEdit, QGroupBox,
@@ -12,6 +15,19 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QTextCursor, QColor, QPalette
 
 from ..workers.engine_worker import EngineWorker
+
+TABLE_ID_DISPLAY_MAP = {
+    "WG7": "BG_131",
+    "WG8": "BG_132",
+    "WG9": "BG_133",
+    "WG10": "BG_135",
+    "WG11": "BG_136",
+    "WG12": "BG_137",
+    "WG13": "BG_138",
+}
+
+TABLE_TAG_RE = re.compile(r"\[table=([^\]]+)\]")
+DISPLAY_TAG_RE = re.compile(r"\[display=([^\]]+)\]")
 
 class NoWheelComboBox(QComboBox):
     """禁用滾輪的 ComboBox"""
@@ -123,6 +139,191 @@ class StatusCard(QFrame):
                     padding: 8px;
                 }
             """)
+
+class ResultCard(QFrame):
+    """顯示單桌最新開獎結果的卡片"""
+
+    table_selected = Signal(str)
+
+    def __init__(self):
+        super().__init__()
+        self._tables: List[str] = []
+        self._current_table = ""
+        self._updating_combo = False
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setFrameStyle(QFrame.StyledPanel)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #374151;
+                border: 1px solid #4b5563;
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        header_layout = QHBoxLayout()
+        icon = QLabel("🎲")
+        icon.setFont(QFont("Segoe UI Emoji", 14))
+        header_layout.addWidget(icon)
+
+        title = QLabel("開獎結果")
+        title.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        selector_layout = QHBoxLayout()
+        selector_label = QLabel("桌號：")
+        selector_label.setStyleSheet("color: #e5e7eb;")
+        selector_layout.addWidget(selector_label)
+
+        self.combo = NoWheelComboBox()
+        self.combo.setEnabled(False)
+        self.combo.currentIndexChanged.connect(self._on_combo_changed)
+        selector_layout.addWidget(self.combo, 1)
+        layout.addLayout(selector_layout)
+
+        self.status_label = QLabel("狀態：--")
+        self.status_label.setStyleSheet("color: #9ca3af;")
+        layout.addWidget(self.status_label)
+
+        self.result_label = QLabel("尚未收到開獎結果")
+        self.result_label.setWordWrap(True)
+        self.result_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.result_label.setStyleSheet("color: #e5e7eb; font-size: 12pt; font-weight: bold;")
+        layout.addWidget(self.result_label)
+
+        self.detail_label = QLabel("")
+        self.detail_label.setWordWrap(True)
+        self.detail_label.setStyleSheet("color: #d1d5db; font-size: 10pt;")
+        layout.addWidget(self.detail_label)
+
+        layout.addStretch()
+
+    def set_stream_status(self, status: Optional[str]):
+        mapping = {
+            "connected": ("狀態：已連線", "#10b981"),
+            "connecting": ("狀態：連線中…", "#f59e0b"),
+            "error": ("狀態：連線錯誤", "#ef4444"),
+            "disconnected": ("狀態：已斷線，等待重試", "#f59e0b"),
+            "stopped": ("狀態：已停止", "#9ca3af"),
+        }
+        text, color = mapping.get(status or "", ("狀態：--", "#9ca3af"))
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(f"color: {color};")
+
+    def set_tables(self, tables: List[str]):
+        tables = list(tables)
+        if tables == self._tables:
+            return
+
+        previous = self.current_table()
+        self._updating_combo = True
+        self.combo.clear()
+
+        if tables:
+            for table_id in tables:
+                display_label = TABLE_ID_DISPLAY_MAP.get(table_id, table_id)
+                self.combo.addItem(display_label, table_id)
+            target = previous if previous in tables else tables[0]
+            index = tables.index(target)
+            self.combo.setCurrentIndex(index)
+            self.combo.setEnabled(True)
+            self._current_table = target
+        else:
+            self.combo.addItem("尚無桌號")
+            self.combo.setCurrentIndex(0)
+            self.combo.setEnabled(False)
+            self._current_table = ""
+
+        self._tables = tables
+        self._updating_combo = False
+        self._emit_selection()
+
+    def set_result(self, info: Optional[Dict[str, Any]]):
+        if not info:
+            self.result_label.setText("尚未收到開獎結果")
+            self.result_label.setStyleSheet("color: #e5e7eb; font-size: 12pt; font-weight: bold;")
+            self.detail_label.setText("")
+            return
+
+        winner = (info.get("winner") or "").upper()
+        winner_map = {
+            "B": ("莊", "#ef4444"),
+            "P": ("閒", "#3b82f6"),
+            "T": ("和", "#10b981"),
+        }
+        winner_text, color = winner_map.get(winner, (winner or "?", "#eab308"))
+        self.result_label.setText(f"最新結果：{winner_text}")
+        self.result_label.setStyleSheet(f"color: {color}; font-size: 14pt; font-weight: bold;")
+
+        round_id = info.get("round_id") or "--"
+        ts = info.get("received_at")
+        ts_text = self._format_timestamp(ts)
+        table_id = info.get("table_id")
+        display_id = TABLE_ID_DISPLAY_MAP.get(table_id, table_id) if table_id else "--"
+
+        detail_lines = []
+        if display_id and display_id != "--":
+            if table_id and display_id != table_id:
+                detail_lines.append(f"桌號：{display_id} ({table_id})")
+            else:
+                detail_lines.append(f"桌號：{display_id}")
+        detail_lines.append(f"局號：{round_id}")
+        detail_lines.append(f"時間：{ts_text}")
+        self.detail_label.setText("\n".join(detail_lines))
+
+    def current_table(self) -> Optional[str]:
+        return self._current_table or None
+
+    def select_table(self, table_id: str) -> None:
+        if not table_id or table_id not in self._tables:
+            return
+        target_index = self._tables.index(table_id)
+        if target_index != self.combo.currentIndex():
+            self.combo.setCurrentIndex(target_index)
+
+    def _on_combo_changed(self, index: int) -> None:
+        if self._updating_combo:
+            return
+        if index < 0:
+            self._current_table = ""
+        else:
+            data = self.combo.itemData(index)
+            if isinstance(data, str) and data:
+                self._current_table = data
+            elif 0 <= index < len(self._tables):
+                self._current_table = self._tables[index]
+            else:
+                self._current_table = ""
+        self._emit_selection()
+
+    def _emit_selection(self) -> None:
+        table = self.current_table()
+        self.table_selected.emit(table or "")
+
+    @staticmethod
+    def _format_timestamp(ts: Optional[Any]) -> str:
+        if ts is None:
+            return "--"
+        try:
+            ts_value = float(ts)
+        except (TypeError, ValueError):
+            return str(ts)
+
+        if ts_value > 1e12:
+            ts_value /= 1000.0
+        try:
+            return time.strftime("%H:%M:%S", time.localtime(ts_value))
+        except Exception:
+            return str(int(ts_value))
+
 
 class LogViewer(QFrame):
     """日誌檢視器"""
@@ -617,6 +818,8 @@ class DashboardPage(QWidget):
         self.last_decision = None  # 記錄上次決策，防重複觸發
         self.is_triggering = False  # 防止重複觸發標志
         self._last_counter_log = None  # 節流計數日誌使用
+        self.latest_results: Dict[str, Dict[str, Any]] = {}
+        self.selected_result_table: Optional[str] = None
 
         self.setup_ui()
         self.setup_engine()
@@ -679,10 +882,16 @@ class DashboardPage(QWidget):
         self.state_card = StatusCard("引擎狀態", "🤖")
         self.mode_card = StatusCard("運行模式", "🧪")
         self.detection_card = StatusCard("檢測狀態", "🎯")
+        self.result_card = ResultCard()
 
         control_layout.addWidget(self.state_card, 0, 0)
         control_layout.addWidget(self.mode_card, 0, 1)
         control_layout.addWidget(self.detection_card, 0, 2)
+        control_layout.addWidget(self.result_card, 0, 3)
+        control_layout.setColumnStretch(0, 1)
+        control_layout.setColumnStretch(1, 1)
+        control_layout.setColumnStretch(2, 1)
+        control_layout.setColumnStretch(3, 1)
 
         # 控制按鈕
         button_layout = QHBoxLayout()
@@ -776,7 +985,7 @@ class DashboardPage(QWidget):
         button_layout.addWidget(self.test_btn)
         button_layout.addStretch()
 
-        control_layout.addLayout(button_layout, 1, 0, 1, 3)
+        control_layout.addLayout(button_layout, 1, 0, 1, 4)
 
         parent_layout.addWidget(control_frame)
 
@@ -792,6 +1001,7 @@ class DashboardPage(QWidget):
 
         # 連接點擊順序卡片信號
         self.click_sequence_card.sequence_changed.connect(self.on_sequence_changed)
+        self.result_card.table_selected.connect(self.on_result_table_selected)
 
         # 啟動工作執行緒
         self.engine_worker.start()
@@ -975,15 +1185,87 @@ class DashboardPage(QWidget):
         """統計資料更新"""
         self.stats_card.update_stats(stats)
 
+    def _extract_log_context(self, message: str) -> Tuple[Optional[str], str]:
+        if not message:
+            return None, message
+        table_id = None
+        cleaned = message
+        table_match = TABLE_TAG_RE.search(message)
+        if table_match:
+            table_id = table_match.group(1)
+            cleaned = cleaned.replace(table_match.group(0), "", 1)
+        display_match = DISPLAY_TAG_RE.search(cleaned)
+        if display_match:
+            cleaned = cleaned.replace(display_match.group(0), "", 1)
+        return table_id, cleaned.lstrip()
+
+    def _should_display_log(self, table_id: Optional[str]) -> bool:
+        if not self.selected_result_table:
+            return True
+        return table_id == self.selected_result_table
+
+    def _process_incoming_log(self, level: str, module: str, message: str) -> None:
+        table_id, cleaned = self._extract_log_context(message)
+        if not self._should_display_log(table_id):
+            return
+        self.log_viewer.add_log(level, module, cleaned)
+
+    def _append_table_log(self, level: str, module: str, table_id: Optional[str], text: str) -> None:
+        if table_id:
+            display = TABLE_ID_DISPLAY_MAP.get(table_id, table_id)
+            prefix = f"[table={table_id}]"
+            if display and display != table_id:
+                prefix += f"[display={display}]"
+            message = f"{prefix} {text}"
+        else:
+            message = text
+        self._process_incoming_log(level, module, message)
+
     def on_log_message(self, level, module, message):
         """接收日誌訊息"""
-        self.log_viewer.add_log(level, module, message)
+        self._process_incoming_log(level, module, message)
 
     def on_engine_status(self, status):
         """引擎狀態更新"""
-        # 現在使用直接檢測，不再從 EngineWorker 更新檢測狀態
-        # 只保留其他狀態更新（統計等）
-        pass
+        latest = status.get("latest_results")
+        if not isinstance(latest, dict):
+            latest = {}
+        self.latest_results = latest
+
+        tables = sorted(latest.keys())
+        self.result_card.set_stream_status(status.get("t9_stream_status"))
+        self.result_card.set_tables(tables)
+
+        current_table = self.result_card.current_table()
+        info = None
+        if current_table and current_table in latest:
+            info = latest[current_table]
+            self.selected_result_table = current_table
+        elif tables:
+            first_table = tables[0]
+            info = latest.get(first_table)
+            self.result_card.select_table(first_table)
+            self.selected_result_table = first_table
+        else:
+            self.selected_result_table = None
+
+        self.result_card.set_result(info)
+
+    def on_result_table_selected(self, table_id: str):
+        """使用者切換桌號"""
+        previous = self.selected_result_table
+        self.selected_result_table = table_id or None
+
+        info = self.latest_results.get(table_id) if table_id else None
+        self.result_card.set_result(info)
+
+        if previous != self.selected_result_table:
+            if self.selected_result_table:
+                display = TABLE_ID_DISPLAY_MAP.get(self.selected_result_table, self.selected_result_table)
+                display_text = display if display == self.selected_result_table else f"{display}（{self.selected_result_table}）"
+                self._append_table_log("INFO", "Result", self.selected_result_table, f"切換到 {display_text}")
+            else:
+                self._process_incoming_log("INFO", "Result", "已清除桌號篩選")
 
     def load_positions_data(self):
         """載入 positions 配置數據"""

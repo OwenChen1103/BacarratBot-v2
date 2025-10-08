@@ -1,9 +1,20 @@
 # ui/workers/engine_worker.py
-import os, json, time, threading, random, logging
-from typing import Optional, Callable, Dict
+import os, json, time, threading, random, logging, queue, unicodedata
+from typing import Optional, Callable, Dict, Any, Tuple
 from PySide6.QtCore import QThread, Signal
 
 from src.autobet.autobet_engine import AutoBetEngine
+from ipc.t9_stream import T9StreamClient
+
+TABLE_DISPLAY_MAP = {
+    "WG7": "BG_131",
+    "WG8": "BG_132",
+    "WG9": "BG_133",
+    "WG10": "BG_135",
+    "WG11": "BG_136",
+    "WG12": "BG_137",
+    "WG13": "BG_138",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +117,11 @@ class EngineWorker(QThread):
         self._round_count = 0
         self._net_profit = 0
         self._last_winner = None
+        self._incoming_events: "queue.Queue[Dict]" = queue.Queue()
+        self._t9_client: Optional[T9StreamClient] = None
+        self._t9_status = "stopped"
+        self._t9_enabled = os.getenv("T9_STREAM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        self._latest_results: Dict[str, Dict[str, Any]] = {}
         # 移除檢測相關狀態，檢測邏輯由 Dashboard 處理
 
     def initialize_engine(self, dry_run: bool = True) -> bool:
@@ -126,6 +142,9 @@ class EngineWorker(QThread):
 
             # 開始狀態輪詢
             self._tick_running = True
+
+            # 啟動結果流監聽（若配置允許）
+            self._setup_result_stream()
 
             # 發送初始狀態
             self.state_changed.emit("idle")
@@ -148,6 +167,9 @@ class EngineWorker(QThread):
 
         while self._tick_running:
             try:
+                # 處理外部結果事件
+                self._drain_incoming_events()
+
                 # 始終發送狀態更新，不管引擎是否啟用
                 current_state = "running" if self._enabled else "idle"
                 self.state_changed.emit(current_state)
@@ -176,7 +198,9 @@ class EngineWorker(QThread):
                     "dry_run": self._dry_run,
                     "rounds": getattr(self, '_round_count', 0),
                     "net": getattr(self, '_net_profit', 0),
-                    "last_winner": getattr(self, '_last_winner', None)
+                    "last_winner": getattr(self, '_last_winner', None),
+                    "t9_stream_status": getattr(self, '_t9_status', None),
+                    "latest_results": self._latest_results_snapshot(),
                 }
                 self.engine_status.emit(status)
 
@@ -196,6 +220,9 @@ class EngineWorker(QThread):
             return False
 
         try:
+            # 確保結果流已啟動
+            self._setup_result_stream()
+
             # 檢查是否需要重新載入配置（如果已經載入過就跳過）
             if not hasattr(self.engine, 'overlay') or not self.engine.overlay:
                 if not self._load_real_configs():
@@ -291,6 +318,12 @@ class EngineWorker(QThread):
             except Exception:
                 pass
             self.event_feeder = None
+        if self._t9_client:
+            try:
+                self._t9_client.stop()
+            except Exception:
+                pass
+            self._t9_client = None
         self._emit_log("INFO", "Engine", "引擎已停止")
 
         # 立即發送狀態更新
@@ -314,10 +347,13 @@ class EngineWorker(QThread):
         try:
             event_type = event.get("type", "UNKNOWN")
             winner = event.get("winner", "N/A")
+            table_id = event.get("table_id")
+            round_id = event.get("round_id")
 
             if event_type == "RESULT":
                 self._round_count += 1
                 self._last_winner = winner
+                self._store_latest_result(event)
 
                 # 模擬投注結果（這裡只是示例）
                 if winner in ["B", "P"]:
@@ -326,7 +362,14 @@ class EngineWorker(QThread):
                     profit = random.randint(-100, 150)
                     self._net_profit += profit
 
-                self._emit_log("INFO", "Events", f"第 {self._round_count} 局結果: {winner}")
+                result_text_map = {"B": "莊", "P": "閒", "T": "和"}
+                result_text = result_text_map.get(winner, winner)
+                details = []
+                if round_id:
+                    details.append(f"round={round_id}")
+                details_str = f" ({', '.join(details)})" if details else ""
+                message = f"結果：{result_text}{details_str}"
+                self._emit_table_log("INFO", table_id, message, module="Events")
 
                 # 如果有真正的引擎，也發送給它
                 if self.engine:
@@ -340,6 +383,48 @@ class EngineWorker(QThread):
 
 
 
+    def _store_latest_result(self, event: Dict[str, Any]) -> None:
+        table_id = event.get("table_id")
+        if not table_id:
+            return
+
+        table_key = str(table_id)
+        round_id = event.get("round_id")
+        round_str = str(round_id) if round_id is not None else None
+
+        info: Dict[str, Any] = {
+            "table_id": table_key,
+            "round_id": round_str,
+            "winner": event.get("winner"),
+            "received_at": event.get("received_at") or int(time.time() * 1000),
+        }
+
+        raw = event.get("raw")
+        if isinstance(raw, dict):
+            game_result = raw.get("gameResult")
+            if isinstance(game_result, dict):
+                info["result_code"] = game_result.get("result")
+                if game_result.get("win_lose_result"):
+                    info["win_lose_result"] = game_result.get("win_lose_result")
+            elif game_result:
+                info["game_result"] = game_result
+            if raw.get("win_lose_result"):
+                info["win_lose_result"] = raw.get("win_lose_result")
+
+        # 將最新資料移到字典尾端維持近序
+        self._latest_results.pop(table_key, None)
+        self._latest_results[table_key] = info
+
+        max_tables = 20
+        while len(self._latest_results) > max_tables:
+            first_key = next(iter(self._latest_results))
+            if first_key == table_key and len(self._latest_results) == 1:
+                break
+            self._latest_results.pop(first_key, None)
+
+    def _latest_results_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        return {k: v.copy() for k, v in self._latest_results.items()}
+
     def _push_status_immediately(self):
         """立即推送狀態到UI（不等200ms迴圈）"""
         current_state = "running" if self._enabled else "idle"
@@ -351,7 +436,9 @@ class EngineWorker(QThread):
             "net": getattr(self, '_net_profit', 0),
             "last_winner": getattr(self, '_last_winner', None),
             "detection_state": self._detection_state,
-            "detection_error": getattr(self, '_last_detection_error', None)
+            "detection_error": getattr(self, '_last_detection_error', None),
+            "t9_stream_status": getattr(self, '_t9_status', None),
+            "latest_results": self._latest_results_snapshot(),
         }
         self.engine_status.emit(status)
 
@@ -360,6 +447,162 @@ class EngineWorker(QThread):
 
     # _trigger_engine_execution 方法已移除
     # 觸發邏輯現在由 Dashboard 直接處理
+
+    # ------------------------------------------------------------------
+    def _map_table_display(self, table_id: Optional[str]) -> Optional[str]:
+        if not table_id:
+            return None
+        return TABLE_DISPLAY_MAP.get(str(table_id), None)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _normalize_text(value: Optional[Any]) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8", errors="replace")
+            except Exception:
+                value = value.decode(errors="ignore")
+        text = str(value).strip()
+        if not text:
+            return ""
+        try:
+            return unicodedata.normalize("NFKC", text)
+        except Exception:
+            return text
+
+    # ------------------------------------------------------------------
+    def _emit_table_log(self, level: str, table_id: Optional[str], message: str, module: str = "Result") -> None:
+        prefix = ""
+        if table_id:
+            table_id_str = str(table_id)
+            display = self._map_table_display(table_id_str)
+            prefix_parts = [f"[table={table_id_str}]"]
+            if display and display != table_id_str:
+                prefix_parts.append(f"[display={display}]")
+            prefix = "".join(prefix_parts) + " "
+        self._emit_log(level, module, f"{prefix}{message}")
+
+    # ------------------------------------------------------------------
+    def _classify_t9_state(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        table_id = record.get("table_id") or record.get("tableId") or record.get("table")
+        table_id = str(table_id) if table_id is not None else None
+
+        round_raw = record.get("round_id") or record.get("roundId") or record.get("merchant_round_id")
+        round_id = str(round_raw) if round_raw is not None else None
+
+        winner, reason = self._extract_t9_winner(record)
+        game_result_raw = record.get("gameResult")
+        game_result = game_result_raw if isinstance(game_result_raw, dict) else {}
+        player_point = game_result.get("player_point")
+        banker_point = game_result.get("banker_point")
+
+        status_candidates = [
+            record.get("game_payment_status_name"),
+            record.get("game_status"),
+            record.get("status"),
+            record.get("state"),
+            record.get("settle_status"),
+            game_result.get("win_lose_result") if isinstance(game_result, dict) else None,
+            record.get("win_lose_result"),
+            record.get("message"),
+        ]
+        status_text = ""
+        for candidate in status_candidates:
+            text = self._normalize_text(candidate)
+            if text:
+                status_text = text
+                break
+
+        summary = ""
+        stage = "unknown"
+        level = "INFO"
+
+        if winner:
+            stage = "result"
+            text_map = {"B": "莊勝", "P": "閒勝", "T": "和局"}
+            summary = f"結果：{text_map.get(winner, winner)}"
+        elif reason == "cancelled":
+            stage = "cancelled"
+            summary = "結果：取消/無效"
+            level = "WARNING"
+        else:
+            lowered = status_text.lower()
+
+            def _match(keywords):
+                return any(kw in lowered for kw in keywords)
+
+            if lowered:
+                if _match(["投注", "下注", "bet", "wager"]):
+                    stage = "betting"
+                    summary = "狀態：投注中"
+                elif _match(["停止", "關閉", "封盤", "封牌", "stop", "close"]):
+                    stage = "closing"
+                    summary = "狀態：停止下注"
+                elif _match(["開獎", "開牌", "進行", "running", "progress", "deal", "發牌"]):
+                    stage = "dealing"
+                    summary = "狀態：開獎中"
+                elif _match(["派彩", "結算", "settle", "payout"]):
+                    stage = "payout"
+                    summary = "狀態：派彩中"
+                elif _match(["完成", "結束", "finish", "done"]):
+                    stage = "finished"
+                    summary = "狀態：局已結束"
+
+            if not summary:
+                if status_text:
+                    summary = f"狀態：{status_text}"
+                else:
+                    summary = "狀態：未知"
+
+        return {
+            "table_id": table_id,
+            "round_id": round_id,
+            "winner": winner,
+            "reason": reason,
+            "status_text": status_text,
+            "stage": stage,
+            "summary": summary,
+            "level": level,
+            "player_point": player_point,
+            "banker_point": banker_point,
+            "raw_record": record,
+        }
+
+    # ------------------------------------------------------------------
+    def _format_t9_log_message(self, info: Dict[str, Any]) -> str:
+        summary = info.get("summary") or "狀態：未知"
+        round_id = info.get("round_id")
+        status_text = info.get("status_text")
+        reason = info.get("reason")
+        winner = info.get("winner")
+        details = []
+
+        if round_id:
+            details.append(f"round={round_id}")
+
+        if winner:
+            player_point = self._normalize_text(info.get("player_point"))
+            banker_point = self._normalize_text(info.get("banker_point"))
+            if player_point or banker_point:
+                points = []
+                if player_point:
+                    points.append(f"閒 {player_point}")
+                if banker_point:
+                    points.append(f"莊 {banker_point}")
+                if points:
+                    details.append(" / ".join(points))
+
+        if status_text and summary != f"狀態：{status_text}" and summary != f"結果：{status_text}":
+            details.append(f"狀態={status_text}")
+
+        if reason and not winner and reason != "cancelled":
+            details.append(f"原因={reason}")
+
+        if details:
+            return f"{summary} ({', '.join(details)})"
+        return summary
 
     def force_test_sequence(self):
         """強制測試點擊順序"""
@@ -397,3 +640,205 @@ class EngineWorker(QThread):
         self._tick_running = False
         self.stop_engine()
         super().quit()
+
+    # ------------------------------------------------------------------
+    def _setup_result_stream(self) -> None:
+        if not self._t9_enabled:
+            self._emit_log("INFO", "Result", "T9 結果流已停用 (T9_STREAM_ENABLED=false)")
+            return
+
+        if self._t9_client:
+            return
+
+        base_url = os.getenv("T9_STREAM_URL", "http://127.0.0.1:8000/api/stream").strip()
+        if not base_url:
+            self._emit_log("WARNING", "Result", "T9_STREAM_URL 未設定，結果流未啟動")
+            return
+
+        event_types = os.getenv("T9_STREAM_EVENT_TYPES", "result")
+
+        retry_env = os.getenv("T9_STREAM_RETRY_SEC", "5")
+        try:
+            retry_delay = float(retry_env)
+        except ValueError:
+            retry_delay = 5.0
+
+        timeout_env = os.getenv("T9_STREAM_TIMEOUT_SEC", "65")
+        try:
+            request_timeout = float(timeout_env)
+        except ValueError:
+            request_timeout = 65.0
+
+        headers = {"Accept": "text/event-stream"}
+        ingest_key = os.getenv("T9_STREAM_INGEST_KEY")
+        if ingest_key:
+            headers["x-ingest-key"] = ingest_key
+
+        self._t9_client = T9StreamClient(
+            base_url,
+            event_types=event_types,
+            headers=headers,
+            retry_delay=retry_delay,
+            request_timeout=request_timeout,
+            on_event=self._on_t9_raw_event,
+            on_status=self._on_t9_status,
+        )
+
+        self._emit_log("INFO", "Result", f"嘗試連線 T9 結果流: {base_url}")
+        self._t9_client.start()
+
+    # ------------------------------------------------------------------
+    def _drain_incoming_events(self) -> None:
+        processed = 0
+        while True:
+            try:
+                evt = self._incoming_events.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                processed += 1
+                self._handle_event(evt)
+        if processed:
+            self._emit_log("DEBUG", "Result", f"處理 {processed} 筆結果事件")
+
+    # ------------------------------------------------------------------
+    def _on_t9_status(self, status: str, detail: Optional[str]) -> None:
+        if status == self._t9_status and status not in {"error"}:
+            return
+        self._t9_status = status
+
+        if status == "connecting":
+            self._emit_log("INFO", "Result", f"連線 T9 流... {detail or ''}")
+        elif status == "connected":
+            self._emit_log("INFO", "Result", "✅ T9 結果流已連線")
+        elif status == "error":
+            self._emit_log("WARNING", "Result", f"T9 結果流錯誤: {detail}")
+        elif status == "disconnected":
+            self._emit_log("INFO", "Result", "T9 結果流已斷線，準備重新連線")
+        elif status == "stopped":
+            self._emit_log("INFO", "Result", "T9 結果流已停止")
+
+    # ------------------------------------------------------------------
+    def _on_t9_raw_event(self, event_name: str, payload: Dict[str, Any]) -> None:
+        event_type = (payload.get("event_type") or event_name or "").lower()
+        if event_type != "result":
+            # 忽略 heartbeat / 其他事件
+            return
+
+        record: Optional[Dict[str, Any]] = None
+        if isinstance(payload.get("payload"), dict):
+            record = payload["payload"].get("record")
+        if record is None:
+            record = payload.get("record")
+
+        if not isinstance(record, dict):
+            self._emit_log("DEBUG", "Result", "忽略未知格式的結果事件")
+            return
+
+        event, info = self._convert_t9_record_to_event(record)
+        if info:
+            message = self._format_t9_log_message(info)
+            self._emit_table_log(info.get("level", "INFO"), info.get("table_id"), message)
+
+        if event:
+            self._incoming_events.put(event)
+
+    # ------------------------------------------------------------------
+    def _convert_t9_record_to_event(self, record: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        info = self._classify_t9_state(record)
+        winner = info.get("winner")
+        table_id = info.get("table_id")
+        round_id = info.get("round_id")
+
+        event: Optional[Dict[str, Any]] = None
+        if winner:
+            event = {
+                "type": "RESULT",
+                "winner": winner,
+                "source": "t9_stream",
+                "received_at": int(time.time() * 1000),
+                "raw": record,
+            }
+            if table_id:
+                event["table_id"] = str(table_id)
+            if round_id is not None:
+                event["round_id"] = str(round_id)
+
+        return event, info
+
+    # ------------------------------------------------------------------
+    def _extract_t9_winner(self, record: Dict[str, Any]) -> (Optional[str], Optional[str]):
+        game_result = record.get("gameResult")
+        cancel_detected = False
+
+        if isinstance(game_result, dict):
+            result_code = game_result.get("result")
+            mapped = self._map_t9_result_code(result_code)
+            if mapped:
+                return mapped, None
+            if result_code == 3:
+                cancel_detected = True
+
+            text_winner = self._map_t9_text(game_result.get("win_lose_result"))
+            if text_winner:
+                return text_winner, None
+
+        # 其他欄位
+        candidates = [
+            record.get("win_lose_result"),
+            record.get("result"),
+            record.get("game_result"),
+            record.get("gameResult") if isinstance(game_result, str) else None,
+        ]
+        for item in candidates:
+            mapped = self._map_t9_text(item)
+            if mapped:
+                return mapped, None
+
+        if cancel_detected:
+            return None, "cancelled"
+
+        return None, None
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _map_t9_result_code(code: Optional[int]) -> Optional[str]:
+        if code is None:
+            return None
+        mapping = {0: "B", 1: "P", 2: "T"}
+        return mapping.get(code)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _map_t9_text(value: Optional[Any]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+
+        lowered = text.lower()
+        if any(keyword in lowered for keyword in ["cancel", "無效", "取消", "invalid", "void"]):
+            return None
+
+        upper = text.upper()
+        direct_map = {
+            "BANKER": "B",
+            "B": "B",
+            "PLAYER": "P",
+            "P": "P",
+            "TIE": "T",
+            "T": "T",
+        }
+        if upper in direct_map:
+            return direct_map[upper]
+
+        normalized = text.replace("\u3000", "").replace(" ", "")
+        if any(ch in normalized for ch in ["莊", "庄"]):
+            return "B"
+        if any(ch in normalized for ch in ["閒", "闲", "閑"]):
+            return "P"
+        if any(ch in normalized for ch in ["和", "平"]):
+            return "T"
+
+        return None

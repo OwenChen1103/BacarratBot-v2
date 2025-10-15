@@ -1,645 +1,646 @@
 # ui/pages/page_strategy.py
-import os
-import json
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QFrame, QGroupBox, QTabWidget,
-    QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox,
-    QTextEdit, QLineEdit, QMessageBox, QSlider,
-    QFormLayout, QScrollArea
-)
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QValidator
+from __future__ import annotations
 
-from ..app_state import APP_STATE, emit_toast
+import json
+import os
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QCheckBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from src.autobet.lines.config import (
+    AdvanceRule,
+    CrossTableLayerConfig,
+    CrossTableMode,
+    DedupMode,
+    RiskLevelAction,
+    RiskLevelConfig,
+    RiskScope,
+    StackPolicy,
+    StrategyDefinition,
+    load_strategy_definitions,
+    parse_strategy_definition,
+)
+
+from ..app_state import emit_toast
+
+
+DEDUP_LABELS = {
+    DedupMode.NONE: "不去重",
+    DedupMode.OVERLAP: "重疊去重",
+    DedupMode.STRICT: "嚴格去重",
+}
+
+ADVANCE_LABELS = {
+    AdvanceRule.LOSS: "輸進下一層",
+    AdvanceRule.WIN: "贏進下一層",
+}
+
+STACK_LABELS = {
+    StackPolicy.NONE: "禁止疊注",
+    StackPolicy.MERGE: "合併注單",
+    StackPolicy.PARALLEL: "平行下單",
+}
+
+MODE_LABELS = {
+    CrossTableMode.RESET: "每桌獨立層數",
+    CrossTableMode.ACCUMULATE: "跨桌累進層數",
+}
+
+RISK_SCOPE_LABELS = {
+    RiskScope.GLOBAL_DAY: "全域單日",
+    RiskScope.TABLE: "桌別",
+    RiskScope.TABLE_STRATEGY: "桌別×策略",
+    RiskScope.ALL_TABLES_STRATEGY: "跨桌×策略",
+    RiskScope.MULTI_STRATEGY: "多策略組",
+}
+
+RISK_ACTION_LABELS = {
+    RiskLevelAction.PAUSE: "暫停",
+    RiskLevelAction.STOP_ALL: "全面停用",
+    RiskLevelAction.NOTIFY: "僅提醒",
+}
+
+
+class RiskTableWidget(QTableWidget):
+    headers = ["層級", "停利", "停損", "連輸限制", "動作", "冷卻秒"]
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(0, len(self.headers), parent)
+        self.setHorizontalHeaderLabels(self.headers)
+        self.verticalHeader().setVisible(False)
+        self.setSelectionMode(QAbstractItemView.NoSelection)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setStyleSheet(
+            """
+            QTableWidget {
+                background-color: #111827;
+                border: 1px solid #374151;
+                color: #f3f4f6;
+                border-radius: 6px;
+            }
+            QHeaderView::section {
+                background-color: #1f2937;
+                color: #d1d5db;
+                padding: 6px;
+                border: 1px solid #374151;
+            }
+            """
+        )
+
+    def add_row(self, level: Optional[RiskLevelConfig] = None) -> None:
+        row = self.rowCount()
+        self.insertRow(row)
+
+        scope_combo = QComboBox()
+        for scope in RiskScope:
+            scope_combo.addItem(RISK_SCOPE_LABELS[scope], scope.value)
+        if level:
+            scope_combo.setCurrentIndex(scope_combo.findData(level.scope.value))
+
+        take_profit = self._make_double_box(level.take_profit if level else None)
+        stop_loss = self._make_double_box(level.stop_loss if level else None)
+        max_losses = self._make_int_box(level.max_drawdown_losses if level else None)
+
+        action_combo = QComboBox()
+        for action in RiskLevelAction:
+            action_combo.addItem(RISK_ACTION_LABELS[action], action.value)
+        if level:
+            action_combo.setCurrentIndex(action_combo.findData(level.action.value))
+
+        cooldown = self._make_double_box(level.cooldown_sec if level else None)
+
+        self.setCellWidget(row, 0, scope_combo)
+        self.setCellWidget(row, 1, take_profit)
+        self.setCellWidget(row, 2, stop_loss)
+        self.setCellWidget(row, 3, max_losses)
+        self.setCellWidget(row, 4, action_combo)
+        self.setCellWidget(row, 5, cooldown)
+
+    @staticmethod
+    def _make_double_box(value: Optional[float]) -> QDoubleSpinBox:
+        box = QDoubleSpinBox()
+        box.setRange(-1e6, 1e6)
+        box.setDecimals(2)
+        box.setSingleStep(10.0)
+        box.setSpecialValueText("--")
+        if value is None:
+            box.setValue(box.minimum())
+        else:
+            box.setValue(float(value))
+        return box
+
+    @staticmethod
+    def _make_int_box(value: Optional[int]) -> QSpinBox:
+        box = QSpinBox()
+        box.setRange(0, 100)
+        box.setSpecialValueText("--")
+        if value is None:
+            box.setValue(box.minimum())
+        else:
+            box.setValue(int(value))
+        return box
+
+    def load_levels(self, levels: List[RiskLevelConfig]) -> None:
+        self.setRowCount(0)
+        for level in levels:
+            self.add_row(level)
+
+    def levels(self) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        for row in range(self.rowCount()):
+            scope_combo = self.cellWidget(row, 0)
+            take_profit = self.cellWidget(row, 1)
+            stop_loss = self.cellWidget(row, 2)
+            max_losses = self.cellWidget(row, 3)
+            action_combo = self.cellWidget(row, 4)
+            cooldown = self.cellWidget(row, 5)
+
+            def val(box: QDoubleSpinBox) -> Optional[float]:
+                if box.specialValueText() and box.value() == box.minimum():
+                    return None
+                return float(box.value())
+
+            def ival(box: QSpinBox) -> Optional[int]:
+                if box.specialValueText() and box.value() == box.minimum():
+                    return None
+                return int(box.value())
+
+            entry = {
+                "scope": scope_combo.currentData(),
+                "take_profit": val(take_profit),
+                "stop_loss": val(stop_loss),
+                "max_drawdown_losses": ival(max_losses),
+                "action": action_combo.currentData(),
+                "cooldown_sec": val(cooldown),
+            }
+            result.append(entry)
+        return result
+
 
 class StrategyPage(QWidget):
-    """策略設定頁面"""
-    strategy_changed = Signal(dict)  # 策略變更信號
+    """Line 策略設定頁"""
 
-    def __init__(self):
+    strategy_changed = Signal(dict)
+
+    def __init__(self) -> None:
         super().__init__()
-        self.strategy_data = self.load_default_strategy()
-        self.setup_ui()
-        self.load_strategy()
+        directory = os.getenv("LINE_STRATEGY_DIR", "configs/line_strategies")
+        self.strategy_dir = Path(directory)
+        self.strategy_dir.mkdir(parents=True, exist_ok=True)
 
-    def load_default_strategy(self):
-        """載入預設策略"""
-        return {
-            "unit": 100,
-            "target": "P",
-            "martingale": {
-                "enabled": True,
-                "max_level": 7,
-                "reset_on_win": True,
-                "progression": [1, 2, 4, 8, 16, 32, 64]
-            },
-            "risk_control": {
-                "max_loss": 5000,
-                "max_win": 3000,
-                "session_limit": 50,
-                "consecutive_loss_limit": 5
-            },
-            "betting_logic": {
-                "follow_trend": True,
-                "switch_after_losses": 3,
-                "skip_tie": True
-            }
-        }
+        self.definitions: Dict[str, StrategyDefinition] = {}
+        self.current_key: Optional[str] = None
+        self.current_data: Dict[str, Any] = {}
 
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        self._build_ui()
+        self.reload_strategies()
 
-        # 標題
-        title = QLabel("⚙️ 策略設定")
-        title.setFont(QFont("Microsoft YaHei UI", 16, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("""
+    # ------------------------------------------------------------------
+    def _build_ui(self) -> None:
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(12)
+        header = QLabel("🧠 策略設定")
+        header.setFont(QFont("Microsoft YaHei UI", 18, QFont.Bold))
+        header.setAlignment(Qt.AlignCenter)
+        header.setStyleSheet("""
             QLabel {
-                color: #ffffff;
-                background-color: #374151;
-                padding: 16px;
-                border-radius: 8px;
-                margin-bottom: 8px;
-            }
-        """)
-        layout.addWidget(title)
-
-        # Tab 控件
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #374151;
                 background-color: #1f2937;
-                border-radius: 6px;
-            }
-            QTabBar::tab {
-                background-color: #374151;
-                color: #e5e7eb;
-                padding: 12px 20px;
-                margin-right: 2px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-            }
-            QTabBar::tab:selected {
-                background-color: #0e7490;
-                color: #ffffff;
-                font-weight: bold;
-            }
-            QTabBar::tab:hover {
-                background-color: #4b5563;
-            }
-        """)
-
-        # 建立各個頁籤
-        self.setup_basic_tab()
-        self.setup_martingale_tab()
-        self.setup_risk_tab()
-        self.setup_logic_tab()
-        self.setup_json_tab()
-
-        layout.addWidget(self.tab_widget)
-
-        # 控制按鈕
-        self.setup_controls(layout)
-
-    def setup_basic_tab(self):
-        """基本設定頁籤"""
-        basic_tab = QWidget()
-        layout = QVBoxLayout(basic_tab)
-
-        # 基本投注設定
-        basic_group = QGroupBox("💰 基本投注設定")
-        basic_layout = QFormLayout(basic_group)
-
-        # 單位金額
-        self.unit_spin = QSpinBox()
-        self.unit_spin.setRange(10, 10000)
-        self.unit_spin.setSingleStep(10)
-        self.unit_spin.setSuffix(" 元")
-        self.unit_spin.setValue(self.strategy_data["unit"])
-        basic_layout.addRow("單位金額:", self.unit_spin)
-
-        # 投注目標
-        self.target_combo = QComboBox()
-        self.target_combo.addItems(["P (閒家)", "B (莊家)", "T (和局)", "AUTO (自動選擇)"])
-        target_map = {"P": 0, "B": 1, "T": 2, "AUTO": 3}
-        self.target_combo.setCurrentIndex(target_map.get(self.strategy_data["target"], 0))
-        basic_layout.addRow("主要投注目標:", self.target_combo)
-
-        layout.addWidget(basic_group)
-
-        # 投注模式
-        mode_group = QGroupBox("🎯 投注模式")
-        mode_layout = QVBoxLayout(mode_group)
-
-        self.follow_trend_cb = QCheckBox("跟隨趨勢投注")
-        self.follow_trend_cb.setChecked(self.strategy_data["betting_logic"]["follow_trend"])
-        mode_layout.addWidget(self.follow_trend_cb)
-
-        self.skip_tie_cb = QCheckBox("跳過和局不投注")
-        self.skip_tie_cb.setChecked(self.strategy_data["betting_logic"]["skip_tie"])
-        mode_layout.addWidget(self.skip_tie_cb)
-
-        # 切換策略設定
-        switch_layout = QHBoxLayout()
-        switch_layout.addWidget(QLabel("連續輸幾局後切換目標:"))
-        self.switch_spin = QSpinBox()
-        self.switch_spin.setRange(1, 10)
-        self.switch_spin.setValue(self.strategy_data["betting_logic"]["switch_after_losses"])
-        switch_layout.addWidget(self.switch_spin)
-        switch_layout.addStretch()
-        mode_layout.addLayout(switch_layout)
-
-        layout.addWidget(mode_group)
-        layout.addStretch()
-
-        self.tab_widget.addTab(basic_tab, "基本設定")
-
-    def setup_martingale_tab(self):
-        """馬丁格爾頁籤"""
-        martingale_tab = QWidget()
-        layout = QVBoxLayout(martingale_tab)
-
-        # 馬丁格爾設定
-        martingale_group = QGroupBox("📈 馬丁格爾倍投策略")
-        martingale_layout = QVBoxLayout(martingale_group)
-
-        # 啟用開關
-        self.martingale_enabled = QCheckBox("啟用馬丁格爾倍投")
-        self.martingale_enabled.setChecked(self.strategy_data["martingale"]["enabled"])
-        self.martingale_enabled.stateChanged.connect(self.toggle_martingale)
-        martingale_layout.addWidget(self.martingale_enabled)
-
-        # 設定區域
-        self.martingale_settings = QFrame()
-        settings_layout = QFormLayout(self.martingale_settings)
-
-        # 最大層級
-        self.max_level_spin = QSpinBox()
-        self.max_level_spin.setRange(1, 15)
-        self.max_level_spin.setValue(self.strategy_data["martingale"]["max_level"])
-        self.max_level_spin.valueChanged.connect(self.update_progression)
-        settings_layout.addRow("最大倍投層級:", self.max_level_spin)
-
-        # 獲勝重置
-        self.reset_on_win = QCheckBox("獲勝後重置到第一層")
-        self.reset_on_win.setChecked(self.strategy_data["martingale"]["reset_on_win"])
-        settings_layout.addRow("重置策略:", self.reset_on_win)
-
-        martingale_layout.addWidget(self.martingale_settings)
-
-        # 倍投序列預覽
-        preview_group = QGroupBox("📊 倍投序列預覽")
-        preview_layout = QVBoxLayout(preview_group)
-
-        self.progression_label = QLabel()
-        self.progression_label.setWordWrap(True)
-        self.progression_label.setStyleSheet("""
-            QLabel {
-                background-color: #2a2f3a;
-                padding: 12px;
-                border-radius: 6px;
-                font-family: 'Consolas', monospace;
-                border: 1px solid #3a3f4a;
-            }
-        """)
-        preview_layout.addWidget(self.progression_label)
-
-        # 風險計算
-        self.risk_label = QLabel()
-        self.risk_label.setStyleSheet("""
-            QLabel {
-                background-color: #7f1d1d;
-                color: #ffffff;
-                padding: 8px 12px;
-                border-radius: 6px;
-                font-weight: bold;
-            }
-        """)
-        preview_layout.addWidget(self.risk_label)
-
-        martingale_layout.addWidget(preview_group)
-
-        layout.addWidget(martingale_group)
-        layout.addStretch()
-
-        self.update_progression()  # 初始化顯示
-        self.tab_widget.addTab(martingale_tab, "馬丁格爾")
-
-    def setup_risk_tab(self):
-        """風控設定頁籤"""
-        risk_tab = QWidget()
-        layout = QVBoxLayout(risk_tab)
-
-        # 損益控制
-        profit_loss_group = QGroupBox("💸 損益控制")
-        pl_layout = QFormLayout(profit_loss_group)
-
-        # 最大虧損
-        self.max_loss_spin = QSpinBox()
-        self.max_loss_spin.setRange(100, 100000)
-        self.max_loss_spin.setSingleStep(100)
-        self.max_loss_spin.setSuffix(" 元")
-        self.max_loss_spin.setValue(self.strategy_data["risk_control"]["max_loss"])
-        pl_layout.addRow("單日最大虧損:", self.max_loss_spin)
-
-        # 最大盈利
-        self.max_win_spin = QSpinBox()
-        self.max_win_spin.setRange(100, 100000)
-        self.max_win_spin.setSingleStep(100)
-        self.max_win_spin.setSuffix(" 元")
-        self.max_win_spin.setValue(self.strategy_data["risk_control"]["max_win"])
-        pl_layout.addRow("目標盈利退出:", self.max_win_spin)
-
-        layout.addWidget(profit_loss_group)
-
-        # 局數控制
-        session_group = QGroupBox("🔢 局數控制")
-        session_layout = QFormLayout(session_group)
-
-        # 單次會話限制
-        self.session_limit_spin = QSpinBox()
-        self.session_limit_spin.setRange(10, 1000)
-        self.session_limit_spin.setValue(self.strategy_data["risk_control"]["session_limit"])
-        session_layout.addRow("單次會話最大局數:", self.session_limit_spin)
-
-        # 連續虧損限制
-        self.consecutive_loss_spin = QSpinBox()
-        self.consecutive_loss_spin.setRange(1, 20)
-        self.consecutive_loss_spin.setValue(self.strategy_data["risk_control"]["consecutive_loss_limit"])
-        session_layout.addRow("連續虧損停止:", self.consecutive_loss_spin)
-
-        layout.addWidget(session_group)
-
-        # 風險警示
-        warning_group = QGroupBox("⚠️ 風險提醒")
-        warning_layout = QVBoxLayout(warning_group)
-
-        warning_text = QLabel("""
-        <b>重要風險提示:</b><br>
-        • 馬丁格爾策略存在巨大風險，可能導致快速虧損<br>
-        • 請設定合理的風控限制，切勿超出承受能力<br>
-        • 建議先在乾跑模式下充分測試策略<br>
-        • 任何投注策略都無法保證盈利
-        """)
-        warning_text.setWordWrap(True)
-        warning_text.setStyleSheet("""
-            QLabel {
-                background-color: #7f1d1d;
-                color: #ffffff;
+                color: #f9fafb;
+                border-radius: 10px;
                 padding: 16px;
-                border-radius: 8px;
-                border: 2px solid #ef4444;
             }
         """)
-        warning_layout.addWidget(warning_text)
+        main_layout.addWidget(header)
 
-        layout.addWidget(warning_group)
-        layout.addStretch()
+        toolbar = QHBoxLayout()
+        self.reload_btn = QPushButton("重新整理")
+        self.new_btn = QPushButton("新增策略")
+        self.duplicate_btn = QPushButton("複製策略")
+        self.delete_btn = QPushButton("刪除策略")
+        self.open_dir_btn = QPushButton("開啟資料夾")
+        for btn in (self.reload_btn, self.new_btn, self.duplicate_btn, self.delete_btn, self.open_dir_btn):
+            btn.setStyleSheet("QPushButton { padding: 6px 12px; border-radius: 6px; background-color: #374151; color: #f3f4f6; }")
+        toolbar.addWidget(self.reload_btn)
+        toolbar.addWidget(self.new_btn)
+        toolbar.addWidget(self.duplicate_btn)
+        toolbar.addWidget(self.delete_btn)
+        toolbar.addStretch()
+        toolbar.addWidget(self.open_dir_btn)
+        main_layout.addLayout(toolbar)
 
-        self.tab_widget.addTab(risk_tab, "風控設定")
+        splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(splitter, 1)
 
-    def setup_logic_tab(self):
-        """投注邏輯頁籤"""
-        logic_tab = QWidget()
-        layout = QVBoxLayout(logic_tab)
-
-        # 決策邏輯
-        decision_group = QGroupBox("🧠 決策邏輯")
-        decision_layout = QVBoxLayout(decision_group)
-
-        # 策略說明
-        strategy_info = QLabel("""
-        <b>當前投注邏輯:</b><br>
-        1. 根據歷史結果判斷趨勢<br>
-        2. 選擇主要投注目標 (莊/閒)<br>
-        3. 連續虧損時考慮切換目標<br>
-        4. 應用馬丁格爾倍投策略<br>
-        5. 觸發風控條件時停止
-        """)
-        strategy_info.setWordWrap(True)
-        strategy_info.setStyleSheet("""
-            QLabel {
-                background-color: #374151;
-                padding: 16px;
-                border-radius: 8px;
-                border: 1px solid #4b5563;
-            }
-        """)
-        decision_layout.addWidget(strategy_info)
-
-        layout.addWidget(decision_group)
-
-        # 高級選項
-        advanced_group = QGroupBox("🔧 高級選項")
-        advanced_layout = QVBoxLayout(advanced_group)
-
-        advanced_placeholder = QLabel("高級策略選項 (待實現):\n• 自定義決策規則\n• 趨勢分析參數\n• 動態投注調整")
-        advanced_placeholder.setStyleSheet("""
-            QLabel {
-                color: #9ca3af;
-                background-color: #2a2f3a;
-                padding: 20px;
-                border-radius: 8px;
-                border: 2px dashed #4b5563;
-            }
-        """)
-        advanced_layout.addWidget(advanced_placeholder)
-
-        layout.addWidget(advanced_group)
-        layout.addStretch()
-
-        self.tab_widget.addTab(logic_tab, "投注邏輯")
-
-    def setup_json_tab(self):
-        """JSON 編輯頁籤"""
-        json_tab = QWidget()
-        layout = QVBoxLayout(json_tab)
-
-        # JSON 編輯器
-        json_group = QGroupBox("📝 JSON 配置編輯")
-        json_layout = QVBoxLayout(json_group)
-
-        # 編輯提示
-        hint = QLabel("高級用戶可直接編輯 JSON 配置，修改後點擊「套用 JSON」生效")
-        hint.setStyleSheet("color: #9ca3af; padding: 8px;")
-        json_layout.addWidget(hint)
-
-        # JSON 編輯框
-        self.json_editor = QTextEdit()
-        self.json_editor.setFont(QFont("Consolas", 10))
-        self.json_editor.setStyleSheet("""
-            QTextEdit {
-                background-color: #1e1e1e;
-                color: #e5e7eb;
+        self.strategy_list = QListWidget()
+        self.strategy_list.setStyleSheet("""
+            QListWidget {
+                background-color: #111827;
                 border: 1px solid #374151;
-                border-radius: 6px;
-                padding: 8px;
-                font-family: 'Consolas', 'Monaco', monospace;
-            }
-        """)
-        json_layout.addWidget(self.json_editor)
-
-        # JSON 控制按鈕
-        json_controls = QHBoxLayout()
-
-        format_btn = QPushButton("🎨 格式化")
-        format_btn.clicked.connect(self.format_json)
-
-        apply_btn = QPushButton("✅ 套用 JSON")
-        apply_btn.setProperty("class", "primary")
-        apply_btn.clicked.connect(self.apply_json)
-
-        reset_btn = QPushButton("🔄 重置")
-        reset_btn.clicked.connect(self.reset_json)
-
-        json_controls.addWidget(format_btn)
-        json_controls.addWidget(apply_btn)
-        json_controls.addWidget(reset_btn)
-        json_controls.addStretch()
-
-        json_layout.addLayout(json_controls)
-        layout.addWidget(json_group)
-
-        self.tab_widget.addTab(json_tab, "JSON 編輯")
-
-    def setup_controls(self, parent_layout):
-        """設定控制按鈕"""
-        controls = QFrame()
-        controls.setStyleSheet("""
-            QFrame {
-                background-color: #374151;
+                color: #f3f4f6;
                 border-radius: 8px;
-                padding: 8px;
+            }
+            QListWidget::item:selected {
+                background-color: #2563eb;
+                color: #ffffff;
             }
         """)
-        controls_layout = QHBoxLayout(controls)
+        splitter.addWidget(self.strategy_list)
 
-        # 載入按鈕
-        load_btn = QPushButton("📂 載入策略")
-        load_btn.clicked.connect(self.load_strategy_file)
+        detail_container = QWidget()
+        detail_layout = QVBoxLayout(detail_container)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 儲存按鈕
-        save_btn = QPushButton("💾 儲存策略")
-        save_btn.setProperty("class", "success")
-        save_btn.clicked.connect(self.save_strategy)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+        detail_layout.addWidget(scroll)
 
-        # 測試按鈕
-        test_btn = QPushButton("🧪 測試策略")
-        test_btn.setProperty("class", "primary")
-        test_btn.clicked.connect(self.test_strategy)
+        self.detail_widget = QWidget()
+        self.detail_layout = QVBoxLayout(self.detail_widget)
+        self.detail_layout.setSpacing(12)
+        self.detail_layout.setContentsMargins(4, 4, 4, 40)
+        scroll.setWidget(self.detail_widget)
 
-        # 重置按鈕
-        reset_btn = QPushButton("🔄 重置預設")
-        reset_btn.clicked.connect(self.reset_to_default)
+        splitter.addWidget(detail_container)
+        splitter.setSizes([220, 680])
 
-        controls_layout.addWidget(load_btn)
-        controls_layout.addWidget(save_btn)
-        controls_layout.addWidget(test_btn)
-        controls_layout.addStretch()
-        controls_layout.addWidget(reset_btn)
+        self._build_entry_section()
+        self._build_staking_section()
+        self._build_cross_table_section()
+        self._build_risk_section()
 
-        parent_layout.addWidget(controls)
+        self.detail_layout.addStretch()
 
-    def toggle_martingale(self, enabled):
-        """切換馬丁格爾設定"""
-        self.martingale_settings.setEnabled(enabled)
+        action_bar = QHBoxLayout()
+        self.save_btn = QPushButton("儲存變更")
+        self.save_as_btn = QPushButton("另存為...")
+        self.revert_btn = QPushButton("還原")
+        for btn in (self.save_btn, self.save_as_btn, self.revert_btn):
+            btn.setStyleSheet("QPushButton { padding: 8px 16px; border-radius: 6px; background-color: #0e7490; color: white; }")
+        action_bar.addWidget(self.save_btn)
+        action_bar.addWidget(self.save_as_btn)
+        action_bar.addWidget(self.revert_btn)
+        action_bar.addStretch()
+        main_layout.addLayout(action_bar)
 
-    def update_progression(self):
-        """更新倍投序列顯示"""
-        max_level = self.max_level_spin.value()
-        unit = self.unit_spin.value()
+        self.reload_btn.clicked.connect(self.reload_strategies)
+        self.new_btn.clicked.connect(self.create_strategy)
+        self.duplicate_btn.clicked.connect(self.duplicate_strategy)
+        self.delete_btn.clicked.connect(self.delete_strategy)
+        self.open_dir_btn.clicked.connect(self.open_directory)
+        self.save_btn.clicked.connect(self.save_current_strategy)
+        self.save_as_btn.clicked.connect(lambda: self.save_current_strategy(save_as=True))
+        self.revert_btn.clicked.connect(self.revert_changes)
+        self.strategy_list.itemSelectionChanged.connect(self._on_strategy_selected)
 
-        progression = []
-        total_risk = 0
-        for i in range(max_level):
-            multiplier = 2 ** i
-            amount = unit * multiplier
-            progression.append(f"第{i+1}層: {amount:,}元")
-            total_risk += amount
+    # ------------------------------------------------------------------
+    def _build_entry_section(self) -> None:
+        group = QGroupBox("進場設定")
+        form = QFormLayout(group)
+        self.entry_pattern = QLineEdit()
+        self.entry_window = QDoubleSpinBox()
+        self.entry_window.setRange(0.0, 3600.0)
+        self.entry_window.setSuffix(" 秒")
+        self.entry_dedup = QComboBox()
+        for mode in DedupMode:
+            self.entry_dedup.addItem(DEDUP_LABELS[mode], mode.value)
+        self.entry_first_trigger = QSpinBox()
+        self.entry_first_trigger.setRange(0, 10)
 
-        progression_text = "\n".join(progression)
-        self.progression_label.setText(progression_text)
+        form.addRow("Pattern:", self.entry_pattern)
+        form.addRow("有效視窗:", self.entry_window)
+        form.addRow("去重模式:", self.entry_dedup)
+        form.addRow("首次觸發層:", self.entry_first_trigger)
+        self.detail_layout.addWidget(group)
 
-        self.risk_label.setText(f"⚠️ 最大風險: {total_risk:,} 元 (完整序列總投注)")
+    def _build_staking_section(self) -> None:
+        group = QGroupBox("注碼序列")
+        form = QFormLayout(group)
+        self.sequence_edit = QLineEdit()
+        self.advance_combo = QComboBox()
+        for rule in AdvanceRule:
+            self.advance_combo.addItem(ADVANCE_LABELS[rule], rule.value)
+        self.reset_on_win = QCheckBox("贏後重置")
+        self.reset_on_loss = QCheckBox("輸後重置")
+        self.max_layers = QSpinBox()
+        self.max_layers.setRange(0, 64)
+        self.max_layers.setSpecialValueText("不限")
+        self.per_hand_cap = QDoubleSpinBox()
+        self.per_hand_cap.setRange(0.0, 1e6)
+        self.per_hand_cap.setSpecialValueText("不限")
+        self.stack_policy = QComboBox()
+        for policy in StackPolicy:
+            self.stack_policy.addItem(STACK_LABELS[policy], policy.value)
 
-    def format_json(self):
-        """格式化 JSON"""
+        form.addRow("序列 (逗號分隔):", self.sequence_edit)
+        form.addRow("層數前進:", self.advance_combo)
+        form.addRow("", self.reset_on_win)
+        form.addRow("", self.reset_on_loss)
+        form.addRow("最大層數:", self.max_layers)
+        form.addRow("單手上限:", self.per_hand_cap)
+        form.addRow("同手策略:", self.stack_policy)
+        self.detail_layout.addWidget(group)
+
+    def _build_cross_table_section(self) -> None:
+        group = QGroupBox("跨桌設定")
+        form = QFormLayout(group)
+        self.cross_scope = QLineEdit()
+        self.cross_mode = QComboBox()
+        for mode in CrossTableMode:
+            self.cross_mode.addItem(MODE_LABELS[mode], mode.value)
+        form.addRow("共享範圍:", self.cross_scope)
+        form.addRow("共享模式:", self.cross_mode)
+        self.detail_layout.addWidget(group)
+
+    def _build_risk_section(self) -> None:
+        group = QGroupBox("風控階層")
+        layout = QVBoxLayout(group)
+        self.risk_table = RiskTableWidget()
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("新增層級")
+        remove_btn = QPushButton("移除層級")
+        for btn in (add_btn, remove_btn):
+            btn.setStyleSheet("QPushButton { padding: 6px 10px; border-radius: 6px; background-color: #374151; color: #f3f4f6; }")
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(remove_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+        layout.addWidget(self.risk_table)
+        self.detail_layout.addWidget(group)
+
+        add_btn.clicked.connect(lambda: self.risk_table.add_row())
+        remove_btn.clicked.connect(self._remove_risk_level)
+
+    # ------------------------------------------------------------------
+    def reload_strategies(self) -> None:
         try:
-            text = self.json_editor.toPlainText()
-            if text.strip():
-                data = json.loads(text)
-                formatted = json.dumps(data, indent=4, ensure_ascii=False)
-                self.json_editor.setPlainText(formatted)
-        except json.JSONDecodeError as e:
-            QMessageBox.warning(self, "JSON 錯誤", f"JSON 格式錯誤: {str(e)}")
+            self.definitions = load_strategy_definitions(self.strategy_dir)
+        except Exception as exc:
+            QMessageBox.critical(self, "載入失敗", f"讀取策略檔失敗: {exc}")
+            self.definitions = {}
 
-    def apply_json(self):
-        """套用 JSON 配置"""
-        try:
-            text = self.json_editor.toPlainText()
-            new_strategy = json.loads(text)
-            self.strategy_data = new_strategy
-            self.update_form_from_data()
-            QMessageBox.information(self, "成功", "JSON 配置已套用到表單")
-        except json.JSONDecodeError as e:
-            QMessageBox.warning(self, "JSON 錯誤", f"無法解析 JSON: {str(e)}")
+        self.strategy_list.clear()
+        for key in sorted(self.definitions.keys()):
+            item = QListWidgetItem(key)
+            self.strategy_list.addItem(item)
 
-    def reset_json(self):
-        """重置 JSON 到當前表單狀態"""
-        self.update_json_from_form()
-
-    def update_form_from_data(self):
-        """從數據更新表單"""
-        # 基本設定
-        self.unit_spin.setValue(self.strategy_data.get("unit", 100))
-        target_map = {"P": 0, "B": 1, "T": 2, "AUTO": 3}
-        self.target_combo.setCurrentIndex(target_map.get(self.strategy_data.get("target", "P"), 0))
-
-        # 投注邏輯
-        betting_logic = self.strategy_data.get("betting_logic", {})
-        self.follow_trend_cb.setChecked(betting_logic.get("follow_trend", True))
-        self.skip_tie_cb.setChecked(betting_logic.get("skip_tie", True))
-        self.switch_spin.setValue(betting_logic.get("switch_after_losses", 3))
-
-        # 馬丁格爾
-        martingale = self.strategy_data.get("martingale", {})
-        self.martingale_enabled.setChecked(martingale.get("enabled", True))
-        self.max_level_spin.setValue(martingale.get("max_level", 7))
-        self.reset_on_win.setChecked(martingale.get("reset_on_win", True))
-
-        # 風控
-        risk_control = self.strategy_data.get("risk_control", {})
-        self.max_loss_spin.setValue(risk_control.get("max_loss", 5000))
-        self.max_win_spin.setValue(risk_control.get("max_win", 3000))
-        self.session_limit_spin.setValue(risk_control.get("session_limit", 50))
-        self.consecutive_loss_spin.setValue(risk_control.get("consecutive_loss_limit", 5))
-
-        self.update_progression()
-
-    def update_json_from_form(self):
-        """從表單更新 JSON"""
-        # 收集表單數據
-        target_options = ["P", "B", "T", "AUTO"]
-
-        self.strategy_data = {
-            "unit": self.unit_spin.value(),
-            "target": target_options[self.target_combo.currentIndex()],
-            "martingale": {
-                "enabled": self.martingale_enabled.isChecked(),
-                "max_level": self.max_level_spin.value(),
-                "reset_on_win": self.reset_on_win.isChecked(),
-                "progression": [2**i for i in range(self.max_level_spin.value())]
-            },
-            "risk_control": {
-                "max_loss": self.max_loss_spin.value(),
-                "max_win": self.max_win_spin.value(),
-                "session_limit": self.session_limit_spin.value(),
-                "consecutive_loss_limit": self.consecutive_loss_spin.value()
-            },
-            "betting_logic": {
-                "follow_trend": self.follow_trend_cb.isChecked(),
-                "switch_after_losses": self.switch_spin.value(),
-                "skip_tie": self.skip_tie_cb.isChecked()
-            }
-        }
-
-        # 更新 JSON 編輯器
-        json_text = json.dumps(self.strategy_data, indent=4, ensure_ascii=False)
-        self.json_editor.setPlainText(json_text)
-
-    def load_strategy(self):
-        """載入策略配置"""
-        # 從文件載入 (如果存在)
-        strategy_file = "configs/strategy.json"
-        if os.path.exists(strategy_file):
-            try:
-                with open(strategy_file, 'r', encoding='utf-8') as f:
-                    self.strategy_data = json.load(f)
-            except Exception:
-                pass  # 使用預設配置
-
-        self.update_form_from_data()
-        self.update_json_from_form()
-
-    def load_strategy_file(self):
-        """載入策略檔案"""
-        from PySide6.QtWidgets import QFileDialog
-
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "載入策略檔案", "configs/", "JSON files (*.json)"
-        )
-
-        if file_path:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    self.strategy_data = json.load(f)
-                self.update_form_from_data()
-                self.update_json_from_form()
-                QMessageBox.information(self, "成功", f"策略已從 {os.path.basename(file_path)} 載入")
-            except Exception as e:
-                QMessageBox.critical(self, "錯誤", f"載入失敗: {str(e)}")
-
-    def save_strategy(self):
-        """儲存策略"""
-        self.update_json_from_form()
-
-        # 確保目錄存在
-        os.makedirs("configs", exist_ok=True)
-
-        try:
-            with open("configs/strategy.json", 'w', encoding='utf-8') as f:
-                json.dump(self.strategy_data, f, indent=4, ensure_ascii=False)
-
-            # 發送狀態更新事件
-            APP_STATE.strategyChanged.emit({
-                'complete': True,
-                'target': self.strategy_data.get('target', ''),
-                'unit': self.strategy_data.get('unit', 0)
-            })
-
-            # 發送 Toast 通知
-            emit_toast("Strategy saved successfully", "success")
-
-            QMessageBox.information(self, "成功", "策略已儲存到 configs/strategy.json")
-            self.strategy_changed.emit(self.strategy_data)
-
-        except Exception as e:
-            QMessageBox.critical(self, "錯誤", f"儲存失敗: {str(e)}")
-
-    def test_strategy(self):
-        """測試策略"""
-        self.update_json_from_form()
-
-        # 基本驗證
-        issues = []
-
-        if self.strategy_data["unit"] < 10:
-            issues.append("單位金額過小 (建議至少 10 元)")
-
-        if self.strategy_data["martingale"]["enabled"]:
-            max_level = self.strategy_data["martingale"]["max_level"]
-            unit = self.strategy_data["unit"]
-            max_bet = unit * (2 ** (max_level - 1))
-            if max_bet > self.strategy_data["risk_control"]["max_loss"]:
-                issues.append(f"馬丁格爾最大投注 ({max_bet:,}) 超過虧損限制")
-
-        if issues:
-            QMessageBox.warning(self, "策略警告", "發現問題:\n" + "\n".join(f"• {issue}" for issue in issues))
+        if self.strategy_list.count():
+            self.strategy_list.setCurrentRow(0)
         else:
-            QMessageBox.information(self, "測試通過", "策略配置看起來合理！")
+            self._clear_form()
 
-    def reset_to_default(self):
-        """重置為預設策略"""
-        reply = QMessageBox.question(
-            self, "確認重置",
-            "確定要重置為預設策略嗎？\n當前的修改將會遺失。",
-            QMessageBox.Yes | QMessageBox.No
-        )
+    def _on_strategy_selected(self) -> None:
+        items = self.strategy_list.selectedItems()
+        if not items:
+            self._clear_form()
+            return
+        key = items[0].text()
+        definition = self.definitions.get(key)
+        if not definition:
+            return
+        self.current_key = key
+        self.current_data = asdict(definition)
+        self._apply_to_form(self.current_data)
 
-        if reply == QMessageBox.Yes:
-            self.strategy_data = self.load_default_strategy()
-            self.update_form_from_data()
-            self.update_json_from_form()
+    # ------------------------------------------------------------------
+    def _apply_to_form(self, data: Dict[str, Any]) -> None:
+        entry = data.get("entry", {})
+        self.entry_pattern.setText(entry.get("pattern", ""))
+        self.entry_window.setValue(float(entry.get("valid_window_sec", 0) or 0))
+        idx = self.entry_dedup.findData(entry.get("dedup", DedupMode.OVERLAP.value))
+        self.entry_dedup.setCurrentIndex(max(idx, 0))
+        self.entry_first_trigger.setValue(int(entry.get("first_trigger_layer", 1) or 1))
+
+        staking = data.get("staking", {})
+        sequence = staking.get("sequence", [])
+        self.sequence_edit.setText(", ".join(str(x) for x in sequence))
+        idx = self.advance_combo.findData(staking.get("advance_on", AdvanceRule.LOSS.value))
+        self.advance_combo.setCurrentIndex(max(idx, 0))
+        self.reset_on_win.setChecked(bool(staking.get("reset_on_win", True)))
+        self.reset_on_loss.setChecked(bool(staking.get("reset_on_loss", False)))
+        max_layers = staking.get("max_layers")
+        if max_layers is None:
+            self.max_layers.setValue(0)
+        else:
+            self.max_layers.setValue(int(max_layers))
+        per_hand_cap = staking.get("per_hand_cap")
+        if per_hand_cap is None:
+            self.per_hand_cap.setValue(0.0)
+        else:
+            self.per_hand_cap.setValue(float(per_hand_cap))
+        idx = self.stack_policy.findData(staking.get("stack_policy", StackPolicy.NONE.value))
+        self.stack_policy.setCurrentIndex(max(idx, 0))
+
+        cross = data.get("cross_table_layer", {})
+        self.cross_scope.setText(str(cross.get("scope", "strategy_key")))
+        idx = self.cross_mode.findData(cross.get("mode", CrossTableMode.RESET.value))
+        self.cross_mode.setCurrentIndex(max(idx, 0))
+
+        risk_levels = data.get("risk", {}).get("levels", [])
+        defs = []
+        for lvl in risk_levels:
+            defs.append(
+                RiskLevelConfig(
+                    scope=RiskScope(lvl.get("scope", RiskScope.TABLE.value)),
+                    take_profit=lvl.get("take_profit"),
+                    stop_loss=lvl.get("stop_loss"),
+                    max_drawdown_losses=lvl.get("max_drawdown_losses"),
+                    action=RiskLevelAction(lvl.get("action", RiskLevelAction.PAUSE.value)),
+                    cooldown_sec=lvl.get("cooldown_sec"),
+                )
+            )
+        self.risk_table.load_levels(defs)
+
+    def _collect_form(self) -> Dict[str, Any]:
+        sequence = [int(x.strip()) for x in self.sequence_edit.text().split(",") if x.strip()]
+        per_hand_cap = float(self.per_hand_cap.value())
+        per_hand_cap_value = None if per_hand_cap == 0.0 else per_hand_cap
+        max_layers_value = None if self.max_layers.value() == 0 else self.max_layers.value()
+
+        data = {
+            "strategy_key": self.current_key or "",
+            "entry": {
+                "pattern": self.entry_pattern.text().strip(),
+                "valid_window_sec": float(self.entry_window.value()),
+                "dedup": self.entry_dedup.currentData(),
+                "first_trigger_layer": int(self.entry_first_trigger.value()),
+            },
+            "staking": {
+                "sequence": sequence,
+                "advance_on": self.advance_combo.currentData(),
+                "reset_on_win": self.reset_on_win.isChecked(),
+                "reset_on_loss": self.reset_on_loss.isChecked(),
+                "max_layers": max_layers_value,
+                "per_hand_cap": per_hand_cap_value,
+                "stack_policy": self.stack_policy.currentData(),
+            },
+            "cross_table_layer": {
+                "scope": self.cross_scope.text().strip() or "strategy_key",
+                "mode": self.cross_mode.currentData(),
+            },
+            "risk": {"levels": self.risk_table.levels()},
+            "metadata": self.current_data.get("metadata", {}),
+        }
+        return data
+
+    # ------------------------------------------------------------------
+    def create_strategy(self) -> None:
+        key, ok = QInputDialog.getText(self, "新增策略", "策略鍵 (僅英數與底線):")
+        if not ok or not key:
+            return
+        key = key.strip()
+        if key in self.definitions:
+            QMessageBox.warning(self, "重複", "策略鍵已存在")
+            return
+
+        default = {
+            "strategy_key": key,
+            "entry": {
+                "pattern": "BB then bet P",
+                "valid_window_sec": 8,
+                "dedup": DedupMode.OVERLAP.value,
+                "first_trigger_layer": 1,
+            },
+            "staking": {
+                "sequence": [10, 20, 40],
+                "advance_on": AdvanceRule.LOSS.value,
+                "reset_on_win": True,
+                "reset_on_loss": False,
+                "max_layers": None,
+                "per_hand_cap": None,
+                "stack_policy": StackPolicy.NONE.value,
+            },
+            "cross_table_layer": asdict(CrossTableLayerConfig()),
+            "risk": {"levels": []},
+            "metadata": {},
+        }
+        self.definitions[key] = parse_strategy_definition(default)
+        self.strategy_list.addItem(key)
+        self.strategy_list.setCurrentRow(self.strategy_list.count() - 1)
+        emit_toast(f"策略 {key} 已建立", "info")
+
+    def duplicate_strategy(self) -> None:
+        if not self.current_key:
+            return
+        key, ok = QInputDialog.getText(self, "複製策略", "新策略鍵:")
+        if not ok or not key:
+            return
+        key = key.strip()
+        if key in self.definitions:
+            QMessageBox.warning(self, "重複", "策略鍵已存在")
+            return
+        data = self._collect_form()
+        data["strategy_key"] = key
+        definition = parse_strategy_definition(data)
+        self.definitions[key] = definition
+        self.strategy_list.addItem(key)
+        self.strategy_list.setCurrentRow(self.strategy_list.count() - 1)
+        emit_toast(f"已複製策略 {self.current_key} -> {key}", "success")
+
+    def delete_strategy(self) -> None:
+        if not self.current_key:
+            return
+        reply = QMessageBox.question(self, "刪除策略", f"確定要刪除 {self.current_key} 嗎？")
+        if reply != QMessageBox.Yes:
+            return
+        path = self.strategy_dir / f"{self.current_key}.json"
+        if path.exists():
+            path.unlink()
+        row = self.strategy_list.currentRow()
+        self.strategy_list.takeItem(row)
+        self.definitions.pop(self.current_key, None)
+        self.current_key = None
+        self._clear_form()
+        emit_toast("策略已刪除", "info")
+
+    def open_directory(self) -> None:
+        try:
+            os.startfile(self.strategy_dir)
+        except Exception:
+            QMessageBox.information(self, "資料夾位置", str(self.strategy_dir.resolve()))
+
+    # ------------------------------------------------------------------
+    def _clear_form(self) -> None:
+        self.current_key = None
+        self.current_data = {}
+        self.entry_pattern.clear()
+        self.entry_window.setValue(0.0)
+        self.entry_dedup.setCurrentIndex(0)
+        self.entry_first_trigger.setValue(1)
+        self.sequence_edit.clear()
+        self.advance_combo.setCurrentIndex(0)
+        self.reset_on_win.setChecked(True)
+        self.reset_on_loss.setChecked(False)
+        self.max_layers.setValue(0)
+        self.per_hand_cap.setValue(0.0)
+        self.stack_policy.setCurrentIndex(0)
+        self.cross_scope.setText("strategy_key")
+        self.cross_mode.setCurrentIndex(0)
+        self.risk_table.setRowCount(0)
+
+    def revert_changes(self) -> None:
+        if not self.current_key:
+            return
+        definition = self.definitions.get(self.current_key)
+        if definition:
+            self.current_data = asdict(definition)
+            self._apply_to_form(self.current_data)
+            emit_toast("已還原變更", "info")
+
+    # ------------------------------------------------------------------
+    def save_current_strategy(self, save_as: bool = False) -> None:
+        if not self.current_key and not save_as:
+            QMessageBox.information(self, "提示", "請先選擇或新增策略")
+            return
+
+        data = self._collect_form()
+        if save_as or not self.current_key:
+            key, ok = QInputDialog.getText(self, "另存為", "新的策略鍵:")
+            if not ok or not key:
+                return
+            data["strategy_key"] = key.strip()
+            self.current_key = data["strategy_key"]
+
+        definition = parse_strategy_definition(data)
+        self.definitions[self.current_key] = definition
+
+        path = self.strategy_dir / f"{self.current_key}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as fp:
+            json.dump(data, fp, ensure_ascii=False, indent=2)
+
+        emit_toast(f"策略 {self.current_key} 已儲存", "success")
+        if not any(self.strategy_list.item(i).text() == self.current_key for i in range(self.strategy_list.count())):
+            self.strategy_list.addItem(self.current_key)
+        self.strategy_changed.emit(data)
+
+    def _remove_risk_level(self) -> None:
+        if self.risk_table.rowCount() == 0:
+            return
+        self.risk_table.removeRow(self.risk_table.rowCount() - 1)

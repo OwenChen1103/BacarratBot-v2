@@ -1,10 +1,17 @@
 # ui/workers/engine_worker.py
 import os, json, time, threading, random, logging, queue, unicodedata
-from typing import Optional, Callable, Dict, Any, Tuple
+from pathlib import Path
+from typing import Optional, Callable, Dict, Any, Tuple, List
 from PySide6.QtCore import QThread, Signal
 
 from src.autobet.autobet_engine import AutoBetEngine
 from ipc.t9_stream import T9StreamClient
+from src.autobet.lines import (
+    LineOrchestrator,
+    TablePhase,
+    BetDecision,
+    load_strategy_definitions,
+)
 
 TABLE_DISPLAY_MAP = {
     "WG7": "BG_131",
@@ -122,6 +129,13 @@ class EngineWorker(QThread):
         self._t9_status = "stopped"
         self._t9_enabled = os.getenv("T9_STREAM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
         self._latest_results: Dict[str, Dict[str, Any]] = {}
+        self._line_orchestrator: Optional[LineOrchestrator] = None
+        self._line_order_queue: "queue.Queue[BetDecision]" = queue.Queue()
+        self._line_summary: Dict[str, Any] = {}
+        base_dir = Path("data/sessions")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        self._line_state_path = base_dir / "line_state.json"
+        self._line_orders_path = base_dir / "line_orders.ndjson"
         # 移除檢測相關狀態，檢測邏輯由 Dashboard 處理
 
     def initialize_engine(self, dry_run: bool = True) -> bool:
@@ -142,6 +156,7 @@ class EngineWorker(QThread):
 
             # 開始狀態輪詢
             self._tick_running = True
+            self._init_line_orchestrator()
 
             # 啟動結果流監聽（若配置允許）
             self._setup_result_stream()
@@ -201,6 +216,7 @@ class EngineWorker(QThread):
                     "last_winner": getattr(self, '_last_winner', None),
                     "t9_stream_status": getattr(self, '_t9_status', None),
                     "latest_results": self._latest_results_snapshot(),
+                    "line_summary": self._line_summary,
                 }
                 self.engine_status.emit(status)
 
@@ -351,6 +367,17 @@ class EngineWorker(QThread):
             round_id = event.get("round_id")
 
             if event_type == "RESULT":
+                if self._line_orchestrator and table_id and round_id:
+                    ts_raw = event.get("received_at")
+                    if isinstance(ts_raw, (int, float)):
+                        ts_sec = float(ts_raw) / 1000.0 if ts_raw > 1e6 else float(ts_raw)
+                    else:
+                        ts_sec = time.time()
+                    self._line_orchestrator.handle_result(table_id, round_id, winner, ts_sec)
+                    self._line_summary = self._line_orchestrator.snapshot()
+                    self._save_line_state()
+                    self._flush_line_events()
+
                 self._round_count += 1
                 self._last_winner = winner
                 self._store_latest_result(event)
@@ -642,6 +669,71 @@ class EngineWorker(QThread):
         super().quit()
 
     # ------------------------------------------------------------------
+    def _init_line_orchestrator(self) -> None:
+        bankroll = float(os.getenv("LINE_BANKROLL", "10000") or 10000)
+        per_hand_pct = float(os.getenv("LINE_PER_HAND_PCT", "0.05") or 0.05)
+        per_table_pct = float(os.getenv("LINE_PER_TABLE_PCT", "0.1") or 0.1)
+        per_hand_cap_env = os.getenv("LINE_PER_HAND_CAP")
+        per_hand_cap = float(per_hand_cap_env) if per_hand_cap_env else None
+        max_tables = int(os.getenv("LINE_MAX_CONCURRENT_TABLES", "3") or 3)
+        min_unit = float(os.getenv("LINE_MIN_BET_UNIT", "1") or 1.0)
+        strategy_dir_env = os.getenv("LINE_STRATEGY_DIR", "configs/line_strategies")
+        strategy_dir = Path(strategy_dir_env)
+
+        try:
+            self._line_orchestrator = LineOrchestrator(
+                bankroll=bankroll,
+                per_hand_risk_pct=per_hand_pct,
+                per_table_risk_pct=per_table_pct,
+                per_hand_cap=per_hand_cap,
+                max_concurrent_tables=max_tables,
+                min_unit=min_unit,
+            )
+            if strategy_dir.exists():
+                definitions = load_strategy_definitions(strategy_dir)
+                for definition in definitions.values():
+                    self._line_orchestrator.register_strategy(definition)
+                self._emit_log("INFO", "Line", f"載入 {len(definitions)} 條 Line 策略")
+            else:
+                self._emit_log(
+                    "WARNING",
+                    "Line",
+                    f"找不到 Line 策略目錄: {strategy_dir}",
+                )
+
+            self._load_line_state()
+            if self._line_orchestrator:
+                self._line_summary = self._line_orchestrator.snapshot()
+                self._save_line_state()
+            else:
+                self._line_summary = {}
+        except Exception as exc:
+            self._line_orchestrator = None
+            self._emit_log("ERROR", "Line", f"策略系統初始化失敗: {exc}")
+
+    # ------------------------------------------------------------------
+    def _load_line_state(self) -> None:
+        if not self._line_orchestrator or not self._line_state_path.exists():
+            return
+        try:
+            data = json.loads(self._line_state_path.read_text(encoding="utf-8"))
+            self._line_orchestrator.restore_state(data)
+            self._line_summary = self._line_orchestrator.snapshot()
+            self._emit_log("INFO", "Line", "Line 狀態已恢復")
+        except Exception as exc:
+            self._emit_log("ERROR", "Line", f"恢復 Line 狀態失敗: {exc}")
+
+    def _save_line_state(self) -> None:
+        if not self._line_orchestrator:
+            return
+        try:
+            payload = self._line_orchestrator.snapshot()
+            payload["saved_at"] = int(time.time())
+            self._line_state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._line_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            self._emit_log("ERROR", "Line", f"寫入 Line 狀態失敗: {exc}")
+
     def _setup_result_stream(self) -> None:
         if not self._t9_enabled:
             self._emit_log("INFO", "Result", "T9 結果流已停用 (T9_STREAM_ENABLED=false)")
@@ -700,6 +792,7 @@ class EngineWorker(QThread):
                 self._handle_event(evt)
         if processed:
             self._emit_log("DEBUG", "Result", f"處理 {processed} 筆結果事件")
+        self._drain_line_orders_queue()
 
     # ------------------------------------------------------------------
     def _on_t9_status(self, status: str, detail: Optional[str]) -> None:
@@ -732,16 +825,119 @@ class EngineWorker(QThread):
             record = payload.get("record")
 
         if not isinstance(record, dict):
-            self._emit_log("DEBUG", "Result", "忽略未知格式的結果事件")
+            self._emit_log("DEBUG", "Result", "skip unknown T9 record format")
             return
 
         event, info = self._convert_t9_record_to_event(record)
         if info:
             message = self._format_t9_log_message(info)
             self._emit_table_log(info.get("level", "INFO"), info.get("table_id"), message)
+            self._process_line_state(info)
 
         if event:
             self._incoming_events.put(event)
+    # ------------------------------------------------------------------
+    def _process_line_state(self, info: Dict[str, Any]) -> None:
+        if not self._line_orchestrator:
+            return
+        table_id = info.get("table_id")
+        if not table_id:
+            return
+        phase = self._map_stage_to_phase(info.get("stage"))
+        round_id = info.get("round_id")
+        ts_raw = info.get("received_at")
+        if isinstance(ts_raw, (int, float)):
+            timestamp = float(ts_raw) / 1000.0 if ts_raw > 1e6 else float(ts_raw)
+        else:
+            timestamp = time.time()
+        if phase:
+            decisions = self._line_orchestrator.update_table_phase(table_id, round_id, phase, timestamp)
+            if decisions:
+                self._handle_line_decisions(decisions)
+        if self._line_orchestrator:
+            self._line_summary = self._line_orchestrator.snapshot()
+            self._save_line_state()
+        self._flush_line_events()
+
+    # ------------------------------------------------------------------
+    def _map_stage_to_phase(self, stage: Optional[str]) -> Optional[TablePhase]:
+        if not stage:
+            return None
+        mapping = {
+            "idle": TablePhase.IDLE,
+            "open": TablePhase.OPEN,
+            "betting": TablePhase.BETTABLE,
+            "closing": TablePhase.LOCKED,
+            "dealing": TablePhase.RESULTING,
+            "payout": TablePhase.RESULTING,
+            "result": TablePhase.RESULTING,
+            "finished": TablePhase.SETTLED,
+            "cancelled": TablePhase.SETTLED,
+        }
+        return mapping.get(stage)
+
+    # ------------------------------------------------------------------
+    def _handle_line_decisions(self, decisions: List[BetDecision]) -> None:
+        for decision in decisions:
+            self._line_order_queue.put(decision)
+            self._emit_log(
+                "INFO",
+                "Line",
+                f"Line {decision.strategy_key} -> table {decision.table_id} round={decision.round_id} direction={decision.direction.value} amount={decision.amount} layer={decision.layer_index}",
+            )
+            self._persist_line_order(decision)
+
+    # ------------------------------------------------------------------
+    def _flush_line_events(self) -> None:
+        if not self._line_orchestrator:
+            return
+        for event in self._line_orchestrator.drain_events():
+            meta = " ".join(f"{k}={v}" for k, v in event.metadata.items()) if event.metadata else ""
+            msg = f"{event.message} {meta}".strip()
+            self._emit_log(event.level, "Line", msg)
+
+    # ------------------------------------------------------------------
+    def _persist_line_order(self, decision: BetDecision) -> None:
+        try:
+            record = {
+                "ts": int(time.time()),
+                "created_at": int(decision.created_at),
+                "table": decision.table_id,
+                "round": decision.round_id,
+                "strategy": decision.strategy_key,
+                "direction": decision.direction.value,
+                "amount": decision.amount,
+                "layer": decision.layer_index,
+                "reason": decision.reason,
+            }
+            self._line_orders_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._line_orders_path.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            self._emit_log("ERROR", "Line", f"記錄 Line 訂單失敗: {exc}")
+
+    # ------------------------------------------------------------------
+    def _drain_line_orders_queue(self) -> None:
+        pending: List[BetDecision] = []
+        while True:
+            try:
+                decision = self._line_order_queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                pending.append(decision)
+
+        for decision in pending:
+            self._dispatch_line_order(decision)
+
+    # ------------------------------------------------------------------
+    def _dispatch_line_order(self, decision: BetDecision) -> None:
+        # TODO: Integrate with AutoBetEngine for automated execution
+        self._emit_log(
+            "INFO",
+            "Line",
+            f"待執行 Line 訂單: {decision.strategy_key} -> {decision.table_id} amount={decision.amount}",
+        )
 
     # ------------------------------------------------------------------
     def _convert_t9_record_to_event(self, record: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:

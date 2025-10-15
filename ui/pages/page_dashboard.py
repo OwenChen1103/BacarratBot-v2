@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QFrame, QTextEdit, QGroupBox,
     QProgressBar, QComboBox, QCheckBox, QSpinBox,
     QMessageBox, QInputDialog, QTableWidget, QTableWidgetItem,
-    QHeaderView, QSplitter, QTabWidget, QScrollArea
+    QHeaderView, QSplitter, QTabWidget, QScrollArea, QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QTextCursor, QColor, QPalette
@@ -60,6 +60,8 @@ class StatusCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        self.setFixedHeight(260)
 
         # 標題
         header_layout = QHBoxLayout()
@@ -164,16 +166,18 @@ class ResultCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
+        self.setFixedHeight(260)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout.setContentsMargins(8, 8, 8, 8)
 
         header_layout = QHBoxLayout()
         icon = QLabel("🎲")
-        icon.setFont(QFont("Segoe UI Emoji", 14))
+        icon.setFont(QFont("Segoe UI Emoji", 12))
         header_layout.addWidget(icon)
 
         title = QLabel("開獎結果")
-        title.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+        title.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
         header_layout.addWidget(title)
         header_layout.addStretch()
         layout.addLayout(header_layout)
@@ -190,21 +194,31 @@ class ResultCard(QFrame):
         layout.addLayout(selector_layout)
 
         self.status_label = QLabel("狀態：--")
-        self.status_label.setStyleSheet("color: #9ca3af;")
-        layout.addWidget(self.status_label)
+        self.status_label.setStyleSheet("color: #f9fafb; font-size: 13pt; font-weight: bold; background: transparent;")
+        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.status_label.setMinimumHeight(44)
+        self.status_label.setMinimumWidth(120)
 
         self.result_label = QLabel("尚未收到開獎結果")
         self.result_label.setWordWrap(True)
         self.result_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.result_label.setStyleSheet("color: #e5e7eb; font-size: 12pt; font-weight: bold;")
-        layout.addWidget(self.result_label)
+        self.result_label.setStyleSheet(
+            "color: #f9fafb; font-size: 13pt; font-weight: bold; background: transparent;"
+        )
+        self.result_label.setMinimumHeight(44)
+        status_result_row = QHBoxLayout()
+        status_result_row.setSpacing(12)
+        status_result_row.addWidget(self.status_label)
+        status_result_row.addWidget(self.result_label, 1)
+        layout.addLayout(status_result_row)
 
         self.detail_label = QLabel("")
         self.detail_label.setWordWrap(True)
+        self.detail_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.detail_label.setStyleSheet("color: #d1d5db; font-size: 10pt;")
+        self.detail_label.setMinimumHeight(56)
         layout.addWidget(self.detail_label)
-
-        layout.addStretch()
+        layout.addSpacing(4)
 
     def set_stream_status(self, status: Optional[str]):
         mapping = {
@@ -261,7 +275,7 @@ class ResultCard(QFrame):
         }
         winner_text, color = winner_map.get(winner, (winner or "?", "#eab308"))
         self.result_label.setText(f"最新結果：{winner_text}")
-        self.result_label.setStyleSheet(f"color: {color}; font-size: 14pt; font-weight: bold;")
+        self.result_label.setStyleSheet(f"color: {color}; font-size: 12pt; font-weight: bold;")
 
         round_id = info.get("round_id") or "--"
         ts = info.get("received_at")
@@ -325,6 +339,176 @@ class ResultCard(QFrame):
             return str(int(ts_value))
 
 
+class LineSummaryCard(QFrame):
+    """顯示 Line 策略總覽的卡片"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.metric_labels: Dict[str, QLabel] = {}
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        self.setFrameStyle(QFrame.StyledPanel)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #1f2937;
+                border: 1px solid #374151;
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        header = QHBoxLayout()
+        title = QLabel("策略總覽")
+        title.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+        icon = QLabel("🧠")
+        icon.setFont(QFont("Segoe UI Emoji", 14))
+        header.addWidget(icon)
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
+
+        metrics_layout = QHBoxLayout()
+        metrics_layout.setSpacing(16)
+        metric_defs = [
+            ("total", "總資金"),
+            ("free", "可用資金"),
+            ("exposure", "當前曝險"),
+            ("active", "活躍策略"),
+            ("frozen", "凍結策略"),
+        ]
+        for key, caption in metric_defs:
+            widget = QWidget()
+            widget_layout = QVBoxLayout(widget)
+            widget_layout.setContentsMargins(0, 0, 0, 0)
+            widget_layout.setSpacing(2)
+
+            cap_label = QLabel(caption)
+            cap_label.setStyleSheet("color: #9ca3af; font-size: 9pt;")
+            value_label = QLabel("--")
+            value_font = QFont("Microsoft YaHei UI", 12, QFont.Bold)
+            value_label.setFont(value_font)
+            value_label.setStyleSheet("color: #f9fafb;")
+
+            widget_layout.addWidget(cap_label)
+            widget_layout.addWidget(value_label)
+            metrics_layout.addWidget(widget)
+            self.metric_labels[key] = value_label
+
+        metrics_layout.addStretch()
+        layout.addLayout(metrics_layout)
+
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(["桌號", "策略", "階段", "層數", "注額", "PnL", "凍結"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionMode(QTableWidget.NoSelection)
+        self.table.setFocusPolicy(Qt.NoFocus)
+        self.table.setStyleSheet("""
+            QTableWidget {
+                background-color: #111827;
+                color: #f3f4f6;
+                border: 1px solid #374151;
+                border-radius: 6px;
+            }
+            QHeaderView::section {
+                background-color: #1f2937;
+                color: #d1d5db;
+                padding: 4px;
+                border: 1px solid #374151;
+            }
+            QTableWidget::item {
+                padding: 4px;
+            }
+        """)
+        layout.addWidget(self.table)
+
+        self.placeholder = QLabel("尚未啟用策略或等待資料…")
+        self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setStyleSheet("color: #9ca3af;")
+        layout.addWidget(self.placeholder)
+
+        self._set_placeholder(True)
+
+    def _set_placeholder(self, enabled: bool) -> None:
+        self.placeholder.setVisible(enabled)
+        self.table.setVisible(not enabled)
+
+    def update_summary(self, summary: Optional[Dict[str, Any]]) -> None:
+        lines = []
+        capital = {}
+        if isinstance(summary, dict):
+            lines = summary.get("lines") or []
+            capital = summary.get("capital") or {}
+
+        total = capital.get("bankroll_total")
+        free = capital.get("bankroll_free")
+        exposure = capital.get("exposure_total")
+        self.metric_labels["total"].setText(self._fmt_money(total))
+        self.metric_labels["free"].setText(self._fmt_money(free))
+        self.metric_labels["exposure"].setText(self._fmt_money(exposure))
+
+        active = sum(1 for ln in lines if ln.get("phase") not in {"idle", "exited"})
+        frozen = sum(1 for ln in lines if ln.get("frozen"))
+        self.metric_labels["active"].setText(str(active))
+        self.metric_labels["frozen"].setText(str(frozen))
+
+        if not lines:
+            self.table.setRowCount(0)
+            self._set_placeholder(True)
+            return
+
+        self._set_placeholder(False)
+        lines_sorted = sorted(
+            lines,
+            key=lambda item: abs(float(item.get("stake") or 0.0)),
+            reverse=True,
+        )
+        max_rows = min(len(lines_sorted), 8)
+        self.table.setRowCount(max_rows)
+        phase_map = {
+            "idle": "待命",
+            "armed": "待進場",
+            "entered": "已下單",
+            "waiting_result": "等待結果",
+            "frozen": "凍結",
+            "exited": "結束",
+        }
+        for row in range(max_rows):
+            item = lines_sorted[row]
+            data = [
+                item.get("table", "--"),
+                item.get("strategy", "--"),
+                phase_map.get(item.get("phase"), item.get("phase", "--")),
+                str(item.get("current_layer", "--")),
+                self._fmt_money(item.get("stake")),
+                self._fmt_money(item.get("pnl"), signed=True),
+                "是" if item.get("frozen") else "否",
+            ]
+            for col, value in enumerate(data):
+                cell = QTableWidgetItem(str(value))
+                if col in (4, 5):
+                    cell.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                else:
+                    cell.setTextAlignment(Qt.AlignCenter)
+                cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(row, col, cell)
+
+    @staticmethod
+    def _fmt_money(value: Optional[Any], signed: bool = False) -> str:
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return "--"
+        fmt = "{:+,.0f}" if signed else "{:,.0f}"
+        return fmt.format(num)
+
+
 class LogViewer(QFrame):
     """日誌檢視器"""
     def __init__(self):
@@ -354,7 +538,7 @@ class LogViewer(QFrame):
         self.level_filter.setCurrentText("全部")
 
         self.module_filter = QComboBox()
-        self.module_filter.addItems(["全部", "Engine", "Events", "Config", "Actuator"])
+        self.module_filter.addItems(["全部", "Engine", "Events", "Config", "Actuator", "Line"])
 
         clear_btn = QPushButton("清除")
         clear_btn.clicked.connect(self.clear_logs)
@@ -819,6 +1003,7 @@ class DashboardPage(QWidget):
         self.is_triggering = False  # 防止重複觸發標志
         self._last_counter_log = None  # 節流計數日誌使用
         self.latest_results: Dict[str, Dict[str, Any]] = {}
+        self.line_summary: Dict[str, Any] = {}
         self.selected_result_table: Optional[str] = None
 
         self.setup_ui()
@@ -851,17 +1036,63 @@ class DashboardPage(QWidget):
         right_layout = QVBoxLayout(right_frame)
         right_layout.setContentsMargins(4, 4, 4, 4)
 
+        self.line_card = LineSummaryCard()
         self.click_sequence_card = ClickSequenceCard()
         self.stats_card = StatsCard()
 
-        right_layout.addWidget(self.click_sequence_card)
-        right_layout.addWidget(self.stats_card)
-        right_layout.addStretch()
+        right_tabs = QTabWidget()
+        right_tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #374151;
+                background-color: #111827;
+                border-radius: 8px;
+            }
+            QTabBar::tab {
+                background-color: #1f2937;
+                color: #d1d5db;
+                padding: 8px 16px;
+                margin: 0 2px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+            }
+            QTabBar::tab:selected {
+                background-color: #2563eb;
+                color: #ffffff;
+            }
+            QTabBar::tab:hover {
+                background-color: #374151;
+            }
+        """)
+
+        line_tab = QWidget()
+        line_layout = QVBoxLayout(line_tab)
+        line_layout.setContentsMargins(8, 8, 8, 8)
+        line_layout.addWidget(self.line_card)
+        line_layout.addStretch()
+        self.line_card.update_summary({})
+
+        sequence_tab = QWidget()
+        sequence_layout = QVBoxLayout(sequence_tab)
+        sequence_layout.setContentsMargins(8, 8, 8, 8)
+        sequence_layout.addWidget(self.click_sequence_card)
+        sequence_layout.addStretch()
+
+        stats_tab = QWidget()
+        stats_layout = QVBoxLayout(stats_tab)
+        stats_layout.setContentsMargins(8, 8, 8, 8)
+        stats_layout.addWidget(self.stats_card)
+        stats_layout.addStretch()
+
+        right_tabs.addTab(line_tab, "策略總覽")
+        right_tabs.addTab(sequence_tab, "操作設定")
+        right_tabs.addTab(stats_tab, "會話統計")
+
+        right_layout.addWidget(right_tabs)
 
         splitter.addWidget(right_frame)
 
         # 設定分割比例 (日誌:狀態 = 2:1)
-        splitter.setSizes([800, 400])
+        splitter.setSizes([720, 480])
 
     def setup_control_panel(self, parent_layout):
         """設定控制面板"""
@@ -876,25 +1107,26 @@ class DashboardPage(QWidget):
             }
         """)
 
-        control_layout = QGridLayout(control_frame)
+        control_layout = QVBoxLayout(control_frame)
+        control_layout.setContentsMargins(8, 8, 8, 8)
+        control_layout.setSpacing(10)
 
-        # 狀態顯示卡片
+        status_row = QHBoxLayout()
+        status_row.setSpacing(16)
         self.state_card = StatusCard("引擎狀態", "🤖")
         self.mode_card = StatusCard("運行模式", "🧪")
         self.detection_card = StatusCard("檢測狀態", "🎯")
         self.result_card = ResultCard()
-
-        control_layout.addWidget(self.state_card, 0, 0)
-        control_layout.addWidget(self.mode_card, 0, 1)
-        control_layout.addWidget(self.detection_card, 0, 2)
-        control_layout.addWidget(self.result_card, 0, 3)
-        control_layout.setColumnStretch(0, 1)
-        control_layout.setColumnStretch(1, 1)
-        control_layout.setColumnStretch(2, 1)
-        control_layout.setColumnStretch(3, 1)
+        status_row.addWidget(self.state_card, 1)
+        status_row.addWidget(self.mode_card, 1)
+        status_row.addWidget(self.detection_card, 1)
+        status_row.addWidget(self.result_card, 1)
+        status_row.addStretch()
+        control_layout.addLayout(status_row)
 
         # 控制按鈕
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(8)
 
         # 模擬實戰按鈕
         self.simulate_btn = QPushButton("🎯 模擬實戰")
@@ -903,10 +1135,10 @@ class DashboardPage(QWidget):
                 background-color: #0284c7;
                 color: white;
                 border: none;
-                padding: 12px 24px;
+                padding: 8px 18px;
                 border-radius: 6px;
                 font-weight: bold;
-                font-size: 11pt;
+                font-size: 10pt;
             }
             QPushButton:hover {
                 background-color: #0369a1;
@@ -924,10 +1156,10 @@ class DashboardPage(QWidget):
                 background-color: #dc2626;
                 color: white;
                 border: none;
-                padding: 12px 24px;
+                padding: 8px 18px;
                 border-radius: 6px;
                 font-weight: bold;
-                font-size: 11pt;
+                font-size: 10pt;
             }
             QPushButton:hover {
                 background-color: #b91c1c;
@@ -945,10 +1177,10 @@ class DashboardPage(QWidget):
                 background-color: #374151;
                 color: white;
                 border: 1px solid #6b7280;
-                padding: 12px 24px;
+                padding: 8px 18px;
                 border-radius: 6px;
                 font-weight: bold;
-                font-size: 11pt;
+                font-size: 10pt;
             }
             QPushButton:hover {
                 background-color: #4b5563;
@@ -968,10 +1200,10 @@ class DashboardPage(QWidget):
                 background-color: #7c3aed;
                 color: white;
                 border: none;
-                padding: 12px 24px;
+                padding: 8px 18px;
                 border-radius: 6px;
                 font-weight: bold;
-                font-size: 11pt;
+                font-size: 10pt;
             }
             QPushButton:hover {
                 background-color: #6d28d9;
@@ -985,7 +1217,7 @@ class DashboardPage(QWidget):
         button_layout.addWidget(self.test_btn)
         button_layout.addStretch()
 
-        control_layout.addLayout(button_layout, 1, 0, 1, 4)
+        control_layout.addLayout(button_layout)
 
         parent_layout.addWidget(control_frame)
 
@@ -1250,6 +1482,11 @@ class DashboardPage(QWidget):
             self.selected_result_table = None
 
         self.result_card.set_result(info)
+        summary = status.get("line_summary")
+        if not isinstance(summary, dict):
+            summary = {}
+        self.line_summary = summary
+        self.line_card.update_summary(summary)
 
     def on_result_table_selected(self, table_id: str):
         """使用者切換桌號"""

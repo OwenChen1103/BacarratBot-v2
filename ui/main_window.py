@@ -17,6 +17,7 @@ from .pages.page_events import EventsPage
 from .pages.page_dashboard import DashboardPage
 from .pages.page_sessions import SessionsPage
 from .pages.page_settings import SettingsPage
+from .pages.page_live_monitor import LiveMonitorPage
 from .app_state import APP_STATE
 from .components.toast import show_toast
 
@@ -61,6 +62,9 @@ class MainWindow(QMainWindow):
         dashboard_page = DashboardPage()
         dashboard_page.navigate_to.connect(self.switch_to_page)
         self.add_page("dashboard", dashboard_page, "實戰主控台")
+
+        # Line 策略即時監控
+        self.add_page("live_monitor", LiveMonitorPage(), "即時監控")
 
         # self.add_page("events", EventsPage(), "📡 事件來源")  # 暫時移除，直接使用 overlay 檢測
         self.add_page("sessions", SessionsPage(), "記錄回放")

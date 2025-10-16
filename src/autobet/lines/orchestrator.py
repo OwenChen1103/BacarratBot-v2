@@ -5,7 +5,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .config import (
     CrossTableMode,
@@ -15,6 +15,8 @@ from .config import (
     RiskScope,
     StrategyDefinition,
 )
+from .conflict import ConflictResolver, PendingDecision
+from .metrics import MetricsTracker, EventRecord, EventType, LatencyMetrics
 from .signal import SignalTracker
 from .state import LayerOutcome, LayerProgression, LinePhase, LineState, LayerState
 
@@ -324,6 +326,8 @@ class LineOrchestrator:
         per_hand_cap: Optional[float] = None,
         max_concurrent_tables: int = 3,
         min_unit: float = 1.0,
+        fixed_priority: Optional[Dict[str, int]] = None,
+        enable_ev_evaluation: bool = True,
     ) -> None:
         self.strategies: Dict[str, StrategyDefinition] = {}
         self.signal_trackers: Dict[str, SignalTracker] = {}
@@ -345,6 +349,11 @@ class LineOrchestrator:
             min_unit=min_unit,
         )
         self.risk = RiskCoordinator()
+        self.conflict_resolver = ConflictResolver(
+            fixed_priority=fixed_priority,
+            enable_ev_evaluation=enable_ev_evaluation,
+        )
+        self.metrics = MetricsTracker()
 
     # ------------------------------------------------------------------
     def register_strategy(self, definition: StrategyDefinition, tables: Optional[Iterable[str]] = None) -> None:
@@ -407,11 +416,58 @@ class LineOrchestrator:
             outcome = self._determine_outcome(position.direction, winner_code)
             pnl_delta = self._pnl_delta(position.amount, outcome)
             line_state.record_outcome(outcome, pnl_delta)
+
+            # 記錄度量數據
+            line_metrics = self.metrics.get_or_create_line_metrics(table_id, strategy_key)
+            outcome_str = "win" if outcome == LayerOutcome.WIN else "loss" if outcome == LayerOutcome.LOSS else "skip"
+            line_metrics.update_layer_stats(
+                layer_index=position.layer_index,
+                stake=progression.config.sequence[min(position.layer_index, len(progression.config.sequence) - 1)],
+                outcome=outcome_str,
+                pnl_delta=pnl_delta,
+            )
+
+            # 記錄結果事件
+            self.metrics.record_event(EventRecord(
+                event_type=EventType.OUTCOME_RECORDED,
+                timestamp=timestamp,
+                table_id=table_id,
+                round_id=round_id,
+                strategy_key=strategy_key,
+                layer_index=position.layer_index,
+                amount=position.amount,
+                pnl_delta=pnl_delta,
+                outcome=outcome.value,
+            ))
+
+            # 層數前進/重置
+            old_index = progression.index
             if outcome in (LayerOutcome.WIN, LayerOutcome.LOSS):
                 progression.advance(outcome)
+                if progression.index != old_index:
+                    # 記錄層數變化
+                    if progression.index < old_index:
+                        self.metrics.record_event(EventRecord(
+                            event_type=EventType.LINE_RESET,
+                            timestamp=timestamp,
+                            table_id=table_id,
+                            strategy_key=strategy_key,
+                            layer_index=progression.index,
+                        ))
+                    else:
+                        self.metrics.record_event(EventRecord(
+                            event_type=EventType.LINE_PROGRESSED,
+                            timestamp=timestamp,
+                            table_id=table_id,
+                            strategy_key=strategy_key,
+                            layer_index=progression.index,
+                            metadata={"from_layer": old_index},
+                        ))
+
             # release to idle
             line_state.phase = LinePhase.IDLE
 
+            # 風控檢查
             risk_events = self.risk.record(
                 strategy_key=strategy_key,
                 table_id=table_id,
@@ -421,6 +477,14 @@ class LineOrchestrator:
             )
             for event in risk_events:
                 self._apply_risk_event(event, table_id, strategy_key)
+                # 記錄風控觸發事件
+                self.metrics.record_event(EventRecord(
+                    event_type=EventType.RISK_TRIGGERED,
+                    timestamp=timestamp,
+                    table_id=table_id,
+                    strategy_key=strategy_key,
+                    reason=f"scope={':'.join(event.scope_key)}, action={event.action.value}",
+                ))
 
             self._record_event(
                 "INFO",
@@ -430,20 +494,32 @@ class LineOrchestrator:
                     "round": round_id,
                     "strategy": strategy_key,
                     "pnl": f"{pnl_delta:.2f}",
+                    "layer": str(position.layer_index),
                 },
             )
 
     # ------------------------------------------------------------------
     def _evaluate_entries(self, table_id: str, round_id: str, timestamp: float) -> List[BetDecision]:
-        decisions: List[BetDecision] = []
+        """
+        評估並生成下注決策
+
+        流程：
+        1. 收集所有候選決策
+        2. 使用衝突解決器篩選（§H）
+        3. 預留資金並生成最終決策
+        """
         strategies = list(self._strategies_for_table(table_id))
         if not strategies:
-            return decisions
+            return []
+
+        # 階段 1: 收集所有候選決策
+        candidates: List[PendingDecision] = []
 
         for strategy_key, definition in strategies:
             line_state = self._ensure_line_state(table_id, strategy_key)
             tracker = self.signal_trackers[strategy_key]
 
+            # 檢查凍結狀態
             if line_state.frozen:
                 self._record_event(
                     "DEBUG",
@@ -452,6 +528,7 @@ class LineOrchestrator:
                 )
                 continue
 
+            # 檢查風控封鎖
             if self.risk.is_blocked(strategy_key, table_id, definition.metadata):
                 self._record_event(
                     "DEBUG",
@@ -460,12 +537,31 @@ class LineOrchestrator:
                 )
                 continue
 
+            # 檢查信號觸發
             if not tracker.should_trigger(table_id, round_id, timestamp):
                 continue
 
+            # 記錄信號觸發事件
+            line_metrics = self.metrics.get_or_create_line_metrics(
+                table_id, strategy_key,
+                first_trigger_layer=definition.entry.first_trigger_layer,
+                cross_table_mode=definition.cross_table_layer.mode.value,
+            )
+            line_metrics.record_trigger()
+            self.metrics.record_event(EventRecord(
+                event_type=EventType.SIGNAL_TRIGGERED,
+                timestamp=timestamp,
+                table_id=table_id,
+                round_id=round_id,
+                strategy_key=strategy_key,
+            ))
+
+            # 設置為 ARMED 狀態
             line_state.phase = LinePhase.ARMED
             line_state.armed_count += 1
+            line_metrics.record_armed()
 
+            # 檢查首次觸發層
             required_triggers = 1 if definition.entry.first_trigger_layer >= 1 else 2
             if line_state.armed_count < required_triggers:
                 self._record_event(
@@ -475,49 +571,135 @@ class LineOrchestrator:
                 )
                 continue
 
+            # 計算方向和金額
             progression = self._get_progression(table_id, strategy_key)
             desired_stake = progression.current_stake()
-
             base_direction = self._derive_base_direction(definition.entry)
             direction, amount = self._resolve_direction(desired_stake, base_direction)
 
-            reserve = self.capital.reserve(table_id, amount, active_tables=len(self.capital.table_positions))
+            # 創建候選決策
+            from .conflict import BetDirection as ConflictBetDirection
+            candidate = PendingDecision(
+                table_id=table_id,
+                round_id=round_id,
+                strategy_key=strategy_key,
+                direction=ConflictBetDirection(direction.value),
+                amount=amount,
+                layer_index=progression.index,
+                timestamp=timestamp,
+                metadata=definition.metadata,
+            )
+            candidates.append(candidate)
+
+        # 階段 2: 衝突解決
+        resolution = self.conflict_resolver.resolve(candidates, self.strategies)
+
+        # 記錄被拒絕的決策
+        for rejected_decision, reason, message in resolution.rejected:
+            self._record_event(
+                "INFO",
+                f"Line {rejected_decision.strategy_key} rejected: {message}",
+                {
+                    "table": table_id,
+                    "round": round_id,
+                    "reason": reason.value,
+                    "direction": rejected_decision.direction.value,
+                },
+            )
+            # 重置被拒絕的 Line 狀態
+            line_state = self._ensure_line_state(table_id, rejected_decision.strategy_key)
+            line_state.phase = LinePhase.IDLE
+            line_state.armed_count = 0
+
+        # 階段 3: 預留資金並生成最終決策
+        final_decisions: List[BetDecision] = []
+
+        for approved in resolution.approved:
+            # 預留資金
+            reserve = self.capital.reserve(
+                table_id,
+                approved.amount,
+                active_tables=len(self.capital.table_positions)
+            )
             if not reserve.ok:
                 self._record_event(
                     "WARNING",
-                    f"Line {strategy_key} skip: {reserve.reason}",
+                    f"Line {approved.strategy_key} skip: {reserve.reason}",
                     {"table": table_id, "round": round_id},
                 )
+                # 重置狀態
+                line_state = self._ensure_line_state(table_id, approved.strategy_key)
+                line_state.phase = LinePhase.IDLE
+                line_state.armed_count = 0
                 continue
 
             actual_amount = reserve.amount
+
+            # 創建最終決策
             decision = BetDecision(
                 table_id=table_id,
                 round_id=round_id,
-                strategy_key=strategy_key,
-                direction=direction,
+                strategy_key=approved.strategy_key,
+                direction=BetDirection(approved.direction.value),
                 amount=actual_amount,
-                layer_index=progression.index,
+                layer_index=approved.layer_index,
+                reason=self.conflict_resolver.get_priority_explanation(approved, self.strategies),
             )
-            self._pending[(table_id, round_id, strategy_key)] = PendingPosition(
+
+            # 記錄待處理倉位
+            self._pending[(table_id, round_id, approved.strategy_key)] = PendingPosition(
                 table_id=table_id,
                 round_id=round_id,
-                strategy_key=strategy_key,
-                direction=direction,
+                strategy_key=approved.strategy_key,
+                direction=BetDirection(approved.direction.value),
                 amount=actual_amount,
-                layer_index=progression.index,
+                layer_index=approved.layer_index,
             )
-            line_state.enter(progression.index, actual_amount, round_id)
-            line_state.mark_waiting()
-            decisions.append(decision)
 
+            # 更新 Line 狀態
+            line_state = self._ensure_line_state(table_id, approved.strategy_key)
+            line_state.enter(approved.layer_index, actual_amount, round_id)
+            line_state.mark_waiting()
+
+            # 記錄進場事件與度量
+            line_metrics = self.metrics.get_or_create_line_metrics(
+                table_id, approved.strategy_key
+            )
+            line_metrics.record_entered(approved.layer_index)
+
+            # 獲取實際注碼（含正負號）
+            progression = self._get_progression(table_id, approved.strategy_key)
+            actual_stake = progression.config.sequence[min(approved.layer_index, len(progression.config.sequence) - 1)]
+
+            self.metrics.record_event(EventRecord(
+                event_type=EventType.LINE_ENTERED,
+                timestamp=time.time(),
+                table_id=table_id,
+                round_id=round_id,
+                strategy_key=approved.strategy_key,
+                layer_index=approved.layer_index,
+                stake=actual_stake,
+                direction=approved.direction.value,
+                amount=actual_amount,
+                reason=decision.reason,
+            ))
+
+            final_decisions.append(decision)
+
+            # 記錄事件
             self._record_event(
                 "INFO",
-                f"Line {strategy_key} enter {direction.value} amount={actual_amount}",
-                {"table": table_id, "round": round_id, "layer": str(progression.index)},
+                f"Line {approved.strategy_key} enter {approved.direction.value} amount={actual_amount}",
+                {
+                    "table": table_id,
+                    "round": round_id,
+                    "layer": str(approved.layer_index),
+                    "stake": str(actual_stake),
+                    "priority": decision.reason,
+                },
             )
 
-        return decisions
+        return final_decisions
 
     # ------------------------------------------------------------------
     def _derive_base_direction(self, entry: EntryConfig) -> BetDirection:

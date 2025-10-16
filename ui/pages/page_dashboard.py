@@ -1010,6 +1010,116 @@ class DashboardPage(QWidget):
         self.setup_engine()
         self.setup_direct_detection()
 
+    def create_strategy_status_indicator(self):
+        """創建策略運行狀態指示器"""
+        frame = QFrame()
+        frame.setFrameStyle(QFrame.StyledPanel)
+        frame.setStyleSheet("""
+            QFrame {
+                background-color: #1f2937;
+                border: 2px solid #374151;
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+
+        layout = QVBoxLayout(frame)
+        layout.setSpacing(8)
+
+        # 標題
+        title = QLabel("🎯 策略系統狀態")
+        title.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
+        layout.addWidget(title)
+
+        # 狀態指示器
+        self.strategy_status_label = QLabel()
+        self.strategy_status_label.setAlignment(Qt.AlignCenter)
+        self.strategy_status_label.setWordWrap(True)
+        self.strategy_status_label.setFont(QFont("Microsoft YaHei UI", 10))
+        self.strategy_status_label.setMinimumHeight(60)
+        layout.addWidget(self.strategy_status_label)
+
+        # 詳細信息
+        self.strategy_detail_label = QLabel()
+        self.strategy_detail_label.setAlignment(Qt.AlignLeft)
+        self.strategy_detail_label.setWordWrap(True)
+        self.strategy_detail_label.setStyleSheet("color: #9ca3af; font-size: 9pt;")
+        layout.addWidget(self.strategy_detail_label)
+
+        # 初始狀態
+        self.update_strategy_status_display(None)
+
+        return frame
+
+    def update_strategy_status_display(self, summary):
+        """更新策略狀態顯示"""
+        if not summary:
+            self.strategy_status_label.setText("⚪ 策略系統未啟動")
+            self.strategy_status_label.setStyleSheet("""
+                QLabel {
+                    background-color: #374151;
+                    border: 2px solid #6b7280;
+                    border-radius: 6px;
+                    padding: 12px;
+                    color: #9ca3af;
+                    font-weight: bold;
+                }
+            """)
+            self.strategy_detail_label.setText("等待啟動引擎...")
+            return
+
+        lines = summary.get("lines", [])
+        capital = summary.get("capital", {})
+
+        # 計算活躍策略數量和策略定義數量
+        active_count = sum(1 for ln in lines if ln.get("phase") not in {"idle", "exited"})
+        frozen_count = sum(1 for ln in lines if ln.get("frozen"))
+        total_pnl = sum(ln.get("pnl", 0.0) for ln in lines)
+
+        # 統計不同策略和桌台數量
+        unique_strategies = set(ln.get("strategy") for ln in lines if ln.get("strategy"))
+        unique_tables = set(ln.get("table") for ln in lines if ln.get("table"))
+        num_strategies = len(unique_strategies)
+        num_tables = len(unique_tables)
+
+        # 判斷狀態
+        if active_count > 0:
+            status_text = f"🟢 運行中 ({active_count} 個活躍)"
+            status_color = "#10b981"
+            border_color = "#10b981"
+        elif len(lines) > 0:
+            if num_strategies == 1:
+                status_text = f"🟡 待機中 (1 個策略監控 {num_tables} 個桌台)"
+            else:
+                status_text = f"🟡 待機中 ({num_strategies} 個策略監控 {num_tables} 個桌台)"
+            status_color = "#f59e0b"
+            border_color = "#f59e0b"
+        else:
+            status_text = "⚪ 無策略運行"
+            status_color = "#6b7280"
+            border_color = "#6b7280"
+
+        self.strategy_status_label.setText(status_text)
+        self.strategy_status_label.setStyleSheet(f"""
+            QLabel {{
+                background-color: #374151;
+                border: 2px solid {border_color};
+                border-radius: 6px;
+                padding: 12px;
+                color: {status_color};
+                font-weight: bold;
+            }}
+        """)
+
+        # 詳細信息
+        details = []
+        if frozen_count > 0:
+            details.append(f"⚠️ {frozen_count} 個策略已凍結")
+        details.append(f"總 PnL: {total_pnl:+.2f}")
+        details.append(f"可用資金: {capital.get('bankroll_free', 0):.0f}/{capital.get('bankroll_total', 0):.0f}")
+
+        self.strategy_detail_label.setText(" | ".join(details))
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -1036,10 +1146,12 @@ class DashboardPage(QWidget):
         right_layout = QVBoxLayout(right_frame)
         right_layout.setContentsMargins(4, 4, 4, 4)
 
-        self.line_card = LineSummaryCard()
+        # 創建組件
+        self.strategy_status_card = self.create_strategy_status_indicator()
         self.click_sequence_card = ClickSequenceCard()
         self.stats_card = StatsCard()
 
+        # 標籤頁控制
         right_tabs = QTabWidget()
         right_tabs.setStyleSheet("""
             QTabWidget::pane {
@@ -1064,30 +1176,33 @@ class DashboardPage(QWidget):
             }
         """)
 
-        line_tab = QWidget()
-        line_layout = QVBoxLayout(line_tab)
-        line_layout.setContentsMargins(8, 8, 8, 8)
-        line_layout.addWidget(self.line_card)
-        line_layout.addStretch()
-        self.line_card.update_summary({})
+        # 策略狀態標籤頁
+        strategy_tab = QWidget()
+        strategy_layout = QVBoxLayout(strategy_tab)
+        strategy_layout.setContentsMargins(8, 8, 8, 8)
+        strategy_layout.addWidget(self.strategy_status_card)
+        strategy_layout.addStretch()
 
+        # 操作設定標籤頁
         sequence_tab = QWidget()
         sequence_layout = QVBoxLayout(sequence_tab)
         sequence_layout.setContentsMargins(8, 8, 8, 8)
         sequence_layout.addWidget(self.click_sequence_card)
         sequence_layout.addStretch()
 
+        # 會話統計標籤頁
         stats_tab = QWidget()
         stats_layout = QVBoxLayout(stats_tab)
         stats_layout.setContentsMargins(8, 8, 8, 8)
         stats_layout.addWidget(self.stats_card)
         stats_layout.addStretch()
 
-        right_tabs.addTab(line_tab, "策略總覽")
+        # 添加標籤頁
+        right_tabs.addTab(strategy_tab, "策略狀態")
         right_tabs.addTab(sequence_tab, "操作設定")
         right_tabs.addTab(stats_tab, "會話統計")
 
-        right_layout.addWidget(right_tabs)
+        right_layout.addWidget(right_tabs, 1)
 
         splitter.addWidget(right_frame)
 
@@ -1486,7 +1601,9 @@ class DashboardPage(QWidget):
         if not isinstance(summary, dict):
             summary = {}
         self.line_summary = summary
-        self.line_card.update_summary(summary)
+
+        # 更新策略狀態指示器
+        self.update_strategy_status_display(summary)
 
     def on_result_table_selected(self, table_id: str):
         """使用者切換桌號"""

@@ -1,0 +1,30 @@
+{
+  "strategy_key": "1",
+  "entry": {
+    "pattern": "BB then bet P",
+    "valid_window_sec": 8.0,
+    "dedup": "overlap_dedup",
+    "first_trigger_layer": 1
+  },
+  "staking": {
+    "sequence": [
+      100,
+      200,
+      300
+    ],
+    "advance_on": "loss",
+    "reset_on_win": true,
+    "reset_on_loss": false,
+    "max_layers": null,
+    "per_hand_cap": null,
+    "stack_policy": "merge"
+  },
+  "cross_table_layer": {
+    "scope": "strategy_key",
+    "mode": "reset"
+  },
+  "risk": {
+    "levels": []
+  },
+  "metadata": {}
+}

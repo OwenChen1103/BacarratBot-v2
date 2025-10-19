@@ -78,10 +78,5 @@
     "source_mode": "image",
     "last_image_path": null,
     "screen_index": 0
-  },
-  "click_sequence": [
-    "chip_1k",
-    "banker",
-    "confirm"
-  ]
+  }
 }

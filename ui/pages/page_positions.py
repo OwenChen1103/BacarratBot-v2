@@ -24,6 +24,7 @@ from ._utils_positions import (
 )
 from ..workers.engine_worker import EngineWorker
 from src.autobet.actuator import Actuator
+from src.autobet.chip_profile_manager import ChipProfileManager
 from ..app_state import APP_STATE, emit_toast
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,9 @@ class PositionsPage(QWidget):
 
         # 創建 actuator 實例用於 dry-run 測試
         self.actuator = None
+
+        # ChipProfile 管理器（用於同步數據）
+        self.chip_profile_manager = ChipProfileManager()
 
         # 測試模式與計時器狀態
         self.test_mode = "dry"          # "dry" | "move"
@@ -1033,9 +1037,50 @@ class PositionsPage(QWidget):
             # 發送 Toast 通知
             emit_toast(f"Positions saved ({point_count} points)", "success")
 
+            # 8. 同步到 ChipProfile（讓兩個系統配合工作）
+            self._sync_to_chip_profile(final_data.get("points", {}))
+
         except Exception as e:
             self.status_err(f"保存失敗: {e}")
             self.log_message(f"❌ 保存失敗: {e}")
+
+    def _sync_to_chip_profile(self, points: Dict):
+        """將位置校準的數據同步到 ChipProfile"""
+        try:
+            # 載入或創建 ChipProfile
+            chip_profile = self.chip_profile_manager.load_profile("default")
+
+            # 同步下注位置（banker, player, tie, confirm, cancel）
+            position_mapping = {
+                "banker": "banker",
+                "player": "player",
+                "tie": "tie",
+                "confirm": "confirm",
+                "cancel": "cancel"
+            }
+
+            synced_count = 0
+            for old_key, new_key in position_mapping.items():
+                if old_key in points and isinstance(points[old_key], dict):
+                    x = points[old_key].get("x", 0)
+                    y = points[old_key].get("y", 0)
+                    if x > 0 and y > 0:
+                        self.chip_profile_manager.update_position_calibration(
+                            chip_profile, new_key, x, y
+                        )
+                        synced_count += 1
+
+            # 保存 ChipProfile
+            if synced_count > 0:
+                if self.chip_profile_manager.save_profile(chip_profile):
+                    self.log_message(f"✨ 已同步 {synced_count} 個位置到 ChipProfile")
+                    logger.info(f"同步成功: {synced_count} 個位置已更新到 ChipProfile")
+                else:
+                    self.log_message("⚠️  ChipProfile 同步失敗")
+
+        except Exception as e:
+            logger.warning(f"同步到 ChipProfile 失敗: {e}")
+            self.log_message(f"⚠️  ChipProfile 同步失敗: {e}")
 
     # ---------- 視覺渲染 ----------
     def refresh_preview(self):

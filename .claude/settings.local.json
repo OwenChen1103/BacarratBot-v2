@@ -11,7 +11,10 @@
       "Bash(chcp:*)",
       "Bash(set PYTHONIOENCODING=utf-8)",
       "Read(//c/Users/owen9/OneDrive/Pictures/Screenshots/**)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(tasklist)",
+      "Bash(findstr:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python:*)"
     ],
     "deny": [],
     "ask": []

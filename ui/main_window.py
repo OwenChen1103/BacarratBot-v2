@@ -12,6 +12,7 @@ from .pages.page_home import HomePage
 from .pages.page_templates import TemplatesPage
 from .pages.page_positions import PositionsPage
 from .pages.page_overlay import OverlayPage
+from .pages.page_chip_profile import ChipProfilePage
 from .pages.page_strategy import StrategyPage
 from .pages.page_events import EventsPage
 from .pages.page_dashboard import DashboardPage
@@ -54,21 +55,22 @@ class MainWindow(QMainWindow):
         home_page.navigate_to.connect(self.switch_to_page)
         self.add_page("home", home_page, "首頁")
 
-        self.add_page("templates", TemplatesPage(), "模板管理")
-        self.add_page("positions", PositionsPage(), "位置校準")
-        self.add_page("overlay", OverlayPage(), "可下注判斷")
-        self.add_page("strategy", StrategyPage(), "策略設定")
-
+        # ===== 主要功能（常用） =====
         dashboard_page = DashboardPage()
         dashboard_page.navigate_to.connect(self.switch_to_page)
         self.add_page("dashboard", dashboard_page, "實戰主控台")
 
-        # Line 策略即時監控
-        self.add_page("live_monitor", LiveMonitorPage(), "即時監控")
+        self.add_page("chip_profile", ChipProfilePage(), "籌碼設定")
+        self.add_page("positions", PositionsPage(), "位置校準")
+        self.add_page("strategy", StrategyPage(), "策略設定")
 
-        # self.add_page("events", EventsPage(), "📡 事件來源")  # 暫時移除，直接使用 overlay 檢測
+        # ===== 輔助功能（較少使用，可選） =====
+        # self.add_page("templates", TemplatesPage(), "模板管理")  # 隱藏：很少使用
+        self.add_page("overlay", OverlayPage(), "可下注判斷")
+        # self.add_page("live_monitor", LiveMonitorPage(), "即時監控")  # 隱藏：已整合到Dashboard
+        # self.add_page("events", EventsPage(), "事件來源")  # 暫時移除，直接使用 overlay 檢測
         self.add_page("sessions", SessionsPage(), "記錄回放")
-        self.add_page("settings", SettingsPage(), "系統設定")
+        # self.add_page("settings", SettingsPage(), "系統設定")  # 隱藏：很少使用
 
         self.nav.setCurrentRow(0)
 

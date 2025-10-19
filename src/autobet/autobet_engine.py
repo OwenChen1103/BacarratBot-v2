@@ -1,15 +1,17 @@
 # src/autobet/autobet_engine.py
 import os, csv, json, time, logging, threading
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 from .detectors import OverlayDetectorWrapper as OverlayDetector, ProductionOverlayDetector
 from .planner import build_click_plan
+from .chip_planner import SmartChipPlanner, BettingPolicy
+from .chip_profile_manager import ChipProfile
 from .actuator import Actuator
 from .risk import IdempotencyGuard, check_limits
 
 logger = logging.getLogger(__name__)
 
 class AutoBetEngine:
-    def __init__(self, dry_run: bool = True, log_callback=None):
+    def __init__(self, dry_run: bool = True, log_callback=None, chip_profile: Optional[ChipProfile] = None):
         self.dry = bool(dry_run)
         self.log_callback = log_callback
         self.enabled = False
@@ -18,6 +20,8 @@ class AutoBetEngine:
         self.strategy: Dict = {}
         self.overlay: Optional[OverlayDetector] = None
         self.act: Optional[Actuator] = None
+        self.chip_profile = chip_profile
+        self.smart_planner: Optional[SmartChipPlanner] = None
         self._tick_stop = threading.Event()
         self._tick_thread: Optional[threading.Thread] = None
         self.state = "idle"
@@ -68,7 +72,27 @@ class AutoBetEngine:
     def initialize_components(self) -> bool:
         try:
             self.overlay = OverlayDetector(self.ui, self.pos)
-            self.act = Actuator(self.pos, self.ui, dry_run=self.dry, log_callback=self.log_callback)
+
+            # 初始化 Actuator：優先使用 ChipProfile，否則使用 positions
+            self.act = Actuator(
+                chip_profile=self.chip_profile,
+                positions=self.pos,
+                ui_cfg=self.ui,
+                dry_run=self.dry,
+                log_callback=self.log_callback
+            )
+
+            # 初始化 SmartChipPlanner
+            if self.chip_profile:
+                calibrated_chips = self.chip_profile.get_calibrated_chips()
+                if calibrated_chips:
+                    self.smart_planner = SmartChipPlanner(
+                        available_chips=calibrated_chips,
+                        policy=BettingPolicy(priority=BettingPolicy.MIN_CLICKS, fallback=BettingPolicy.FLOOR)
+                    )
+                    logger.info(f"SmartChipPlanner 初始化成功，{len(calibrated_chips)} 顆已校準籌碼")
+                else:
+                    logger.warning("ChipProfile 中沒有已校準的籌碼，將使用舊系統")
 
             # 加這兩行 - 確認載入的是哪個類
             logger.warning(
@@ -191,27 +215,75 @@ class AutoBetEngine:
         """通知狀態變更"""
         logger.info(f"引擎狀態變更: {self.state}")
 
+    def _build_plan_with_smart_planner(self, unit: int, targets_units: Dict[str, int]) -> List[Tuple[str, str]]:
+        """
+        使用 SmartChipPlanner 生成下注計畫
+
+        Args:
+            unit: 單位金額
+            targets_units: 目標與單位數 {target: units}
+
+        Returns:
+            List[Tuple[str, str]]: 點擊計畫，格式與舊系統相同
+        """
+        plan: List[Tuple[str, str]] = []
+
+        for target, units in targets_units.items():
+            amount = unit * int(units)
+
+            # 使用 SmartChipPlanner 規劃
+            bet_plan = self.smart_planner.plan_bet(
+                target_amount=amount,
+                max_clicks=self.chip_profile.constraints.get("max_clicks_per_hand", 8) if self.chip_profile else None
+            )
+
+            if not bet_plan.success:
+                logger.error(f"SmartChipPlanner 規劃失敗: {bet_plan.reason}")
+                # 回退到舊系統
+                logger.warning("回退到舊系統 planner")
+                return build_click_plan(unit, targets_units)
+
+            if bet_plan.warnings:
+                for warning in bet_plan.warnings:
+                    logger.warning(f"SmartChipPlanner 警告: {warning}")
+
+            # 轉換 BetPlan 為舊格式
+            for chip in bet_plan.chips:
+                plan.append(('chip', str(chip.value)))
+            plan.append(('bet', target))
+
+            logger.info(f"目標 {target}: {bet_plan.recipe} (實際 {bet_plan.actual_amount} 元)")
+
+        return plan
+
     def _prepare_betting_plan(self) -> bool:
         """準備下注計畫並檢查風控"""
         try:
             logger.info("開始準備下注計畫...")
-            
+
             # 檢查是否有自定義點擊順序
             click_sequence = self.pos.get("click_sequence", [])
             if click_sequence:
                 logger.info(f"發現自定義點擊順序: {click_sequence}")
                 self.current_plan = click_sequence  # 直接使用點擊順序
                 return True
-            
+
             # 使用策略生成計畫
             unit = int(self.strategy.get("unit", 1000))
             targets = self.strategy.get("targets", ["banker"])
             split = self.strategy.get("split_units", {"banker": 1})
             targets_units = {t: int(split.get(t, 1)) for t in targets}
-            
+
             logger.info(f"策略配置: unit={unit}, targets={targets}, split_units={split}")
 
-            plan = build_click_plan(unit, targets_units)
+            # 優先使用 SmartChipPlanner
+            if self.smart_planner:
+                logger.info("使用 SmartChipPlanner 生成計畫")
+                plan = self._build_plan_with_smart_planner(unit, targets_units)
+            else:
+                logger.warning("SmartChipPlanner 未初始化，使用舊系統")
+                plan = build_click_plan(unit, targets_units)
+
             plan_repr = json.dumps(plan, ensure_ascii=False)
             round_id = f"NOID-{int(time.time())}"
 
@@ -364,7 +436,14 @@ class AutoBetEngine:
         split = self.strategy.get("split_units", {"banker":1})
         targets_units = {t: int(split.get(t,1)) for t in targets}
 
-        plan = build_click_plan(unit, targets_units)
+        # 優先使用 SmartChipPlanner
+        if self.smart_planner:
+            logger.info("使用 SmartChipPlanner 生成計畫")
+            plan = self._build_plan_with_smart_planner(unit, targets_units)
+        else:
+            logger.warning("SmartChipPlanner 未初始化，使用舊系統")
+            plan = build_click_plan(unit, targets_units)
+
         plan_repr = json.dumps(plan, ensure_ascii=False)
         round_id = f"NOID-{int(time.time())}"  # 若外部未給，送單冪等仍可用
 

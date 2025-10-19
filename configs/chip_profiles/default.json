@@ -1,0 +1,100 @@
+{
+  "profile_name": "預設籌碼組合",
+  "provider": "WG/BG",
+  "table_type": "standard",
+  "created_at": "2025-10-16T10:00:00Z",
+  "last_updated": "2025-10-17T12:57:43.937626",
+  "chips": [
+    {
+      "slot": 1,
+      "value": 100,
+      "color": "red",
+      "label": "100",
+      "calibrated": true,
+      "x": 645,
+      "y": 957
+    },
+    {
+      "slot": 2,
+      "value": 500,
+      "color": "gray",
+      "label": "500",
+      "calibrated": true,
+      "x": 712,
+      "y": 952
+    },
+    {
+      "slot": 3,
+      "value": 1000,
+      "color": "orange",
+      "label": "1K",
+      "calibrated": true,
+      "x": 777,
+      "y": 956
+    },
+    {
+      "slot": 4,
+      "value": 10000,
+      "color": "green",
+      "label": "10K",
+      "calibrated": false,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "slot": 5,
+      "value": 50000,
+      "color": "purple",
+      "label": "50K",
+      "calibrated": false,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "slot": 6,
+      "value": 100000,
+      "color": "black",
+      "label": "100K",
+      "calibrated": false,
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "bet_positions": {
+    "banker": {
+      "x": 1132,
+      "y": 832,
+      "calibrated": true
+    },
+    "player": {
+      "x": 781,
+      "y": 835,
+      "calibrated": true
+    },
+    "tie": {
+      "x": 956,
+      "y": 820,
+      "calibrated": true
+    },
+    "confirm": {
+      "x": 1130,
+      "y": 957,
+      "calibrated": true
+    },
+    "cancel": {
+      "x": 1246,
+      "y": 951,
+      "calibrated": true
+    }
+  },
+  "constraints": {
+    "min_bet": 100,
+    "max_bet": 10000,
+    "max_clicks_per_hand": 8
+  },
+  "validation": {
+    "last_check": null,
+    "status": "unchecked",
+    "warnings": []
+  }
+}

@@ -6,15 +6,16 @@ import re
 from typing import Any, Dict, Optional, List, Tuple
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QFrame, QTextEdit, QGroupBox,
+    QLabel, QPushButton, QFrame, QTextEdit,
     QProgressBar, QComboBox, QCheckBox, QSpinBox,
     QMessageBox, QInputDialog, QTableWidget, QTableWidgetItem,
-    QHeaderView, QSplitter, QTabWidget, QScrollArea, QSizePolicy
+    QHeaderView, QSplitter, QScrollArea, QSizePolicy, QTabWidget
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QTextCursor, QColor, QPalette
 
 from ..workers.engine_worker import EngineWorker
+from ..components.next_bet_card import NextBetCard
 
 TABLE_ID_DISPLAY_MAP = {
     "WG7": "BG_131",
@@ -55,21 +56,21 @@ class StatusCard(QFrame):
                 background-color: #374151;
                 border: 1px solid #4b5563;
                 border-radius: 8px;
-                padding: 12px;
+                padding: 8px;
             }
         """)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        self.setFixedHeight(260)
+        layout.setSpacing(6)
+        self.setFixedHeight(180)
 
         # 標題
         header_layout = QHBoxLayout()
         self.icon_label = QLabel(self.icon)
-        self.icon_label.setFont(QFont("Segoe UI Emoji", 14))
+        self.icon_label.setFont(QFont("Segoe UI Emoji", 11))
 
         self.title_label = QLabel(self.title)
-        self.title_label.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+        self.title_label.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
 
         header_layout.addWidget(self.icon_label)
         header_layout.addWidget(self.title_label)
@@ -98,9 +99,9 @@ class StatusCard(QFrame):
 
         # 使用支援 emoji 的字體，檢測卡片使用較小字體
         if self.is_detection_card:
-            content_font = QFont("Microsoft YaHei UI", 9, QFont.Normal)
+            content_font = QFont("Microsoft YaHei UI", 8, QFont.Normal)
         else:
-            content_font = QFont("Microsoft YaHei UI", 12, QFont.Bold)
+            content_font = QFont("Microsoft YaHei UI", 10, QFont.Bold)
         content_font.setStyleStrategy(QFont.PreferAntialias)
         self.content_label.setFont(content_font)
 
@@ -149,7 +150,9 @@ class ResultCard(QFrame):
 
     def __init__(self):
         super().__init__()
-        self._tables: List[str] = []
+        # 固定桌號列表 BG_125 - BG_138
+        self._all_tables: List[str] = [f"BG_{i}" for i in range(125, 139)]
+        self._tables_with_data: set = set()  # 已收到結果的桌號
         self._current_table = ""
         self._updating_combo = False
         self._setup_ui()
@@ -161,23 +164,23 @@ class ResultCard(QFrame):
                 background-color: #374151;
                 border: 1px solid #4b5563;
                 border-radius: 8px;
-                padding: 12px;
+                padding: 8px;
             }
         """)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(6)
-        self.setFixedHeight(260)
+        layout.setSpacing(4)
+        self.setFixedHeight(180)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(6, 6, 6, 6)
 
         header_layout = QHBoxLayout()
         icon = QLabel("🎲")
-        icon.setFont(QFont("Segoe UI Emoji", 12))
+        icon.setFont(QFont("Segoe UI Emoji", 10))
         header_layout.addWidget(icon)
 
         title = QLabel("開獎結果")
-        title.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
+        title.setFont(QFont("Microsoft YaHei UI", 8, QFont.Bold))
         header_layout.addWidget(title)
         header_layout.addStretch()
         layout.addLayout(header_layout)
@@ -188,24 +191,27 @@ class ResultCard(QFrame):
         selector_layout.addWidget(selector_label)
 
         self.combo = NoWheelComboBox()
-        self.combo.setEnabled(False)
+        self.combo.setEnabled(True)  # 改為啟用，因為我們有固定列表
         self.combo.currentIndexChanged.connect(self._on_combo_changed)
         selector_layout.addWidget(self.combo, 1)
         layout.addLayout(selector_layout)
 
+        # 初始化固定桌號列表
+        self._init_fixed_tables()
+
         self.status_label = QLabel("狀態：--")
-        self.status_label.setStyleSheet("color: #f9fafb; font-size: 13pt; font-weight: bold; background: transparent;")
+        self.status_label.setStyleSheet("color: #f9fafb; font-size: 9pt; font-weight: bold; background: transparent;")
         self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.status_label.setMinimumHeight(44)
-        self.status_label.setMinimumWidth(120)
+        self.status_label.setMinimumHeight(30)
+        self.status_label.setMinimumWidth(80)
 
         self.result_label = QLabel("尚未收到開獎結果")
         self.result_label.setWordWrap(True)
         self.result_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.result_label.setStyleSheet(
-            "color: #f9fafb; font-size: 13pt; font-weight: bold; background: transparent;"
+            "color: #f9fafb; font-size: 9pt; font-weight: bold; background: transparent;"
         )
-        self.result_label.setMinimumHeight(44)
+        self.result_label.setMinimumHeight(30)
         status_result_row = QHBoxLayout()
         status_result_row.setSpacing(12)
         status_result_row.addWidget(self.status_label)
@@ -215,10 +221,19 @@ class ResultCard(QFrame):
         self.detail_label = QLabel("")
         self.detail_label.setWordWrap(True)
         self.detail_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.detail_label.setStyleSheet("color: #d1d5db; font-size: 10pt;")
-        self.detail_label.setMinimumHeight(56)
+        self.detail_label.setStyleSheet("color: #d1d5db; font-size: 8pt;")
+        self.detail_label.setMinimumHeight(40)
         layout.addWidget(self.detail_label)
         layout.addSpacing(4)
+
+    def _init_fixed_tables(self):
+        """初始化固定桌號列表"""
+        self._updating_combo = True
+        self.combo.clear()
+        for table_id in self._all_tables:
+            # 直接顯示桌號，不加後綴
+            self.combo.addItem(table_id, table_id)
+        self._updating_combo = False
 
     def set_stream_status(self, status: Optional[str]):
         mapping = {
@@ -233,37 +248,34 @@ class ResultCard(QFrame):
         self.status_label.setStyleSheet(f"color: {color};")
 
     def set_tables(self, tables: List[str]):
+        """更新已收到結果的桌號列表"""
         tables = list(tables)
-        if tables == self._tables:
+
+        # 檢查是否有新桌號
+        new_tables = set(tables) - self._tables_with_data
+        if not new_tables:
+            # 沒有新桌號，不需要更新
             return
 
-        previous = self.current_table()
-        self._updating_combo = True
-        self.combo.clear()
+        # 更新已收到數據的桌號集合
+        self._tables_with_data.update(tables)
 
-        if tables:
-            for table_id in tables:
-                display_label = TABLE_ID_DISPLAY_MAP.get(table_id, table_id)
-                self.combo.addItem(display_label, table_id)
-            target = previous if previous in tables else tables[0]
-            index = tables.index(target)
-            self.combo.setCurrentIndex(index)
-            self.combo.setEnabled(True)
-            self._current_table = target
-        else:
-            self.combo.addItem("尚無桌號")
-            self.combo.setCurrentIndex(0)
-            self.combo.setEnabled(False)
-            self._current_table = ""
-
-        self._tables = tables
-        self._updating_combo = False
-        self._emit_selection()
+        # 如果選單還沒有初始化項目，或者當前沒有選中的桌號，才需要更新選中項
+        if self.combo.count() == 0:
+            # 第一次初始化，選擇第一個有數據的桌號
+            if self._tables_with_data:
+                first_table = min(self._tables_with_data, key=lambda x: int(x.split('_')[1]))
+                index = self._all_tables.index(first_table)
+                self._updating_combo = True
+                self.combo.setCurrentIndex(index)
+                self._current_table = first_table
+                self._updating_combo = False
+                self._emit_selection()
 
     def set_result(self, info: Optional[Dict[str, Any]]):
         if not info:
             self.result_label.setText("尚未收到開獎結果")
-            self.result_label.setStyleSheet("color: #e5e7eb; font-size: 12pt; font-weight: bold;")
+            self.result_label.setStyleSheet("color: #e5e7eb; font-size: 9pt; font-weight: bold;")
             self.detail_label.setText("")
             return
 
@@ -275,7 +287,7 @@ class ResultCard(QFrame):
         }
         winner_text, color = winner_map.get(winner, (winner or "?", "#eab308"))
         self.result_label.setText(f"最新結果：{winner_text}")
-        self.result_label.setStyleSheet(f"color: {color}; font-size: 12pt; font-weight: bold;")
+        self.result_label.setStyleSheet(f"color: {color}; font-size: 9pt; font-weight: bold;")
 
         round_id = info.get("round_id") or "--"
         ts = info.get("received_at")
@@ -1122,7 +1134,7 @@ class DashboardPage(QWidget):
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setSpacing(8)
 
         # 頂部控制區域
         self.setup_control_panel(layout)
@@ -1141,19 +1153,20 @@ class DashboardPage(QWidget):
 
         splitter.addWidget(left_frame)
 
-        # 右側：狀態與統計
+        # 右側：狀態與統計（標籤頁形式）
         right_frame = QFrame()
         right_layout = QVBoxLayout(right_frame)
         right_layout.setContentsMargins(4, 4, 4, 4)
+        right_layout.setSpacing(12)
 
         # 創建組件
         self.strategy_status_card = self.create_strategy_status_indicator()
-        self.click_sequence_card = ClickSequenceCard()
-        self.stats_card = StatsCard()
+        self.next_bet_card = NextBetCard()
+        # self.click_sequence_card = ClickSequenceCard()  # 已過時：SmartChipPlanner 自動生成計畫
 
-        # 標籤頁控制
-        right_tabs = QTabWidget()
-        right_tabs.setStyleSheet("""
+        # 標籤頁（策略狀態 | 即將下注）
+        tabs = QTabWidget()
+        tabs.setStyleSheet("""
             QTabWidget::pane {
                 border: 1px solid #374151;
                 background-color: #111827;
@@ -1162,13 +1175,15 @@ class DashboardPage(QWidget):
             QTabBar::tab {
                 background-color: #1f2937;
                 color: #d1d5db;
-                padding: 8px 16px;
+                padding: 10px 20px;
                 margin: 0 2px;
                 border-top-left-radius: 6px;
                 border-top-right-radius: 6px;
+                font-size: 10pt;
+                font-weight: bold;
             }
             QTabBar::tab:selected {
-                background-color: #2563eb;
+                background-color: #3b82f6;
                 color: #ffffff;
             }
             QTabBar::tab:hover {
@@ -1176,38 +1191,29 @@ class DashboardPage(QWidget):
             }
         """)
 
-        # 策略狀態標籤頁
-        strategy_tab = QWidget()
-        strategy_layout = QVBoxLayout(strategy_tab)
-        strategy_layout.setContentsMargins(8, 8, 8, 8)
-        strategy_layout.addWidget(self.strategy_status_card)
-        strategy_layout.addStretch()
+        # Tab 1: 策略狀態
+        tab1 = QWidget()
+        tab1_layout = QVBoxLayout(tab1)
+        tab1_layout.setContentsMargins(8, 8, 8, 8)
+        tab1_layout.addWidget(self.strategy_status_card)
+        tab1_layout.addStretch()
 
-        # 操作設定標籤頁
-        sequence_tab = QWidget()
-        sequence_layout = QVBoxLayout(sequence_tab)
-        sequence_layout.setContentsMargins(8, 8, 8, 8)
-        sequence_layout.addWidget(self.click_sequence_card)
-        sequence_layout.addStretch()
+        # Tab 2: 即將下注
+        tab2 = QWidget()
+        tab2_layout = QVBoxLayout(tab2)
+        tab2_layout.setContentsMargins(8, 8, 8, 8)
+        tab2_layout.addWidget(self.next_bet_card)
+        tab2_layout.addStretch()
 
-        # 會話統計標籤頁
-        stats_tab = QWidget()
-        stats_layout = QVBoxLayout(stats_tab)
-        stats_layout.setContentsMargins(8, 8, 8, 8)
-        stats_layout.addWidget(self.stats_card)
-        stats_layout.addStretch()
+        tabs.addTab(tab1, "🎯 策略狀態")
+        tabs.addTab(tab2, "📌 即將下注")
 
-        # 添加標籤頁
-        right_tabs.addTab(strategy_tab, "策略狀態")
-        right_tabs.addTab(sequence_tab, "操作設定")
-        right_tabs.addTab(stats_tab, "會話統計")
-
-        right_layout.addWidget(right_tabs, 1)
+        right_layout.addWidget(tabs, 1)  # 給予彈性空間
 
         splitter.addWidget(right_frame)
 
-        # 設定分割比例 (日誌:狀態 = 2:1)
-        splitter.setSizes([720, 480])
+        # 設定分割比例 (日誌:狀態 = 1:1，讓右側有更多空間顯示下注資訊)
+        splitter.setSizes([600, 600])
 
     def setup_control_panel(self, parent_layout):
         """設定控制面板"""
@@ -1218,16 +1224,17 @@ class DashboardPage(QWidget):
                 background-color: #1f2937;
                 border: 1px solid #374151;
                 border-radius: 8px;
-                padding: 8px;
+                padding: 6px;
             }
         """)
 
         control_layout = QVBoxLayout(control_frame)
-        control_layout.setContentsMargins(8, 8, 8, 8)
-        control_layout.setSpacing(10)
+        control_layout.setContentsMargins(6, 6, 6, 6)
+        control_layout.setSpacing(8)
 
+        # 狀態卡片行
         status_row = QHBoxLayout()
-        status_row.setSpacing(16)
+        status_row.setSpacing(8)
         self.state_card = StatusCard("引擎狀態", "🤖")
         self.mode_card = StatusCard("運行模式", "🧪")
         self.detection_card = StatusCard("檢測狀態", "🎯")
@@ -1250,10 +1257,10 @@ class DashboardPage(QWidget):
                 background-color: #0284c7;
                 color: white;
                 border: none;
-                padding: 8px 18px;
-                border-radius: 6px;
+                padding: 6px 12px;
+                border-radius: 4px;
                 font-weight: bold;
-                font-size: 10pt;
+                font-size: 9pt;
             }
             QPushButton:hover {
                 background-color: #0369a1;
@@ -1271,10 +1278,10 @@ class DashboardPage(QWidget):
                 background-color: #dc2626;
                 color: white;
                 border: none;
-                padding: 8px 18px;
-                border-radius: 6px;
+                padding: 6px 12px;
+                border-radius: 4px;
                 font-weight: bold;
-                font-size: 10pt;
+                font-size: 9pt;
             }
             QPushButton:hover {
                 background-color: #b91c1c;
@@ -1292,10 +1299,10 @@ class DashboardPage(QWidget):
                 background-color: #374151;
                 color: white;
                 border: 1px solid #6b7280;
-                padding: 8px 18px;
-                border-radius: 6px;
+                padding: 6px 12px;
+                border-radius: 4px;
                 font-weight: bold;
-                font-size: 10pt;
+                font-size: 9pt;
             }
             QPushButton:hover {
                 background-color: #4b5563;
@@ -1315,10 +1322,10 @@ class DashboardPage(QWidget):
                 background-color: #7c3aed;
                 color: white;
                 border: none;
-                padding: 8px 18px;
-                border-radius: 6px;
+                padding: 6px 12px;
+                border-radius: 4px;
                 font-weight: bold;
-                font-size: 10pt;
+                font-size: 9pt;
             }
             QPushButton:hover {
                 background-color: #6d28d9;
@@ -1345,9 +1352,9 @@ class DashboardPage(QWidget):
         self.engine_worker.session_stats.connect(self.on_stats_updated)
         self.engine_worker.log_message.connect(self.on_log_message)
         self.engine_worker.engine_status.connect(self.on_engine_status)
+        self.engine_worker.next_bet_info.connect(self.on_next_bet_info)
 
-        # 連接點擊順序卡片信號
-        self.click_sequence_card.sequence_changed.connect(self.on_sequence_changed)
+        # 連接結果卡片信號
         self.result_card.table_selected.connect(self.on_result_table_selected)
 
         # 啟動工作執行緒
@@ -1376,9 +1383,21 @@ class DashboardPage(QWidget):
         if not self.engine_worker:
             return
 
+        # 檢查是否已選擇桌號
+        selected_table = self.result_card.current_table()
+        if not selected_table:
+            QMessageBox.warning(self, "無法啟動", "請先選擇一個桌號！")
+            return
+
         # 檢查配置完整性
         if not self._check_config_ready():
             return
+
+        # 禁用桌號選擇器
+        self.result_card.combo.setEnabled(False)
+
+        # 設定選定的桌號到引擎
+        self.engine_worker.set_selected_table(selected_table)
 
         # 啟動模擬模式
         success = self.engine_worker.start_engine(mode="simulation")
@@ -1390,6 +1409,9 @@ class DashboardPage(QWidget):
             self.mode_card.update_content("🎯 模擬實戰中", "#0284c7")
             self.detection_card.update_content("檢測中", "#f59e0b", False)
             self.start_time = self.get_current_time()
+
+            # 更新NextBetCard狀態為運行中
+            self.next_bet_card.set_engine_running(True)
 
             # 啟動運行時間計時器
             self.runtime_timer = QTimer()
@@ -1404,6 +1426,12 @@ class DashboardPage(QWidget):
     def start_real_battle(self):
         """啟動真實實戰模式"""
         if not self.engine_worker:
+            return
+
+        # 檢查是否已選擇桌號
+        selected_table = self.result_card.current_table()
+        if not selected_table:
+            QMessageBox.warning(self, "無法啟動", "請先選擇一個桌號！")
             return
 
         # 檢查配置完整性
@@ -1425,6 +1453,12 @@ class DashboardPage(QWidget):
         if reply != QMessageBox.Yes:
             return
 
+        # 禁用桌號選擇器
+        self.result_card.combo.setEnabled(False)
+
+        # 設定選定的桌號到引擎
+        self.engine_worker.set_selected_table(selected_table)
+
         # 啟動實戰模式
         success = self.engine_worker.start_engine(mode="real")
 
@@ -1435,6 +1469,9 @@ class DashboardPage(QWidget):
             self.mode_card.update_content("⚡ 實戰進行中", "#dc2626")
             self.detection_card.update_content("檢測中", "#f59e0b", False)
             self.start_time = self.get_current_time()
+
+            # 更新NextBetCard狀態為運行中
+            self.next_bet_card.set_engine_running(True)
 
             # 啟動運行時間計時器
             self.runtime_timer = QTimer()
@@ -1484,6 +1521,12 @@ class DashboardPage(QWidget):
         if self.engine_worker:
             self.engine_worker.stop_engine()
 
+        # 更新NextBetCard狀態為等待啟動
+        self.next_bet_card.set_engine_running(False)
+
+        # 重新啟用桌號選擇器
+        self.result_card.combo.setEnabled(True)
+
         # 重置按鈕狀態
         self.simulate_btn.setEnabled(True)
         self.start_btn.setEnabled(True)
@@ -1530,7 +1573,8 @@ class DashboardPage(QWidget):
 
     def on_stats_updated(self, stats):
         """統計資料更新"""
-        self.stats_card.update_stats(stats)
+        # StatsCard已移除,統計信息現在整合到策略狀態顯示中
+        pass
 
     def _extract_log_context(self, message: str) -> Tuple[Optional[str], str]:
         if not message:
@@ -1571,6 +1615,38 @@ class DashboardPage(QWidget):
     def on_log_message(self, level, module, message):
         """接收日誌訊息"""
         self._process_incoming_log(level, module, message)
+
+    def on_next_bet_info(self, bet_info: dict):
+        """接收即將下注的詳細資訊並更新 NextBetCard"""
+        try:
+            # 從 bet_info 提取所有必要資訊
+            table_id = bet_info.get('table_id', '')
+            strategy = bet_info.get('strategy', '')
+            layer = bet_info.get('layer', 'N/A')
+            direction = bet_info.get('direction', '')
+            amount = bet_info.get('amount', 0)
+            recipe = bet_info.get('recipe', '')
+
+            # 轉換方向顯示 (如果是縮寫形式)
+            direction_map = {
+                "banker": "B",
+                "player": "P",
+                "tie": "T"
+            }
+            direction_display = direction_map.get(direction.lower(), direction)
+
+            # 更新 NextBetCard
+            self.next_bet_card.update_next_bet(
+                table=table_id,
+                strategy=strategy,
+                current_layer=layer.split('/')[0] if '/' in str(layer) else layer,
+                direction=direction_display,
+                amount=amount,
+                recipe=recipe
+            )
+
+        except Exception as e:
+            self.log_viewer.add_log("ERROR", "Dashboard", f"更新下注卡片失敗: {e}")
 
     def on_engine_status(self, status):
         """引擎狀態更新"""
@@ -1623,31 +1699,14 @@ class DashboardPage(QWidget):
 
     def load_positions_data(self):
         """載入 positions 配置數據"""
-        try:
-            import json
-            if os.path.exists("configs/positions.json"):
-                with open("configs/positions.json", "r", encoding="utf-8") as f:
-                    positions_data = json.load(f)
-                self.click_sequence_card.update_enabled_positions(positions_data)
-        except Exception as e:
-            self.log_viewer.add_log("WARNING", "Dashboard", f"載入 positions 數據失敗: {e}")
-
-    def on_sequence_changed(self, sequence):
-        """點擊順序變更"""
-        self.log_viewer.add_log("INFO", "Dashboard", f"點擊順序已更新: {' → '.join(sequence)}")
+        # 不再需要載入點擊順序數據，SmartChipPlanner 自動生成計畫
+        pass
 
     def update_runtime(self):
         """更新運行時間"""
-        if self.start_time:
-            current_time = self.get_current_time()
-            elapsed = current_time - self.start_time
-
-            hours = elapsed // 3600
-            minutes = (elapsed % 3600) // 60
-            seconds = elapsed % 60
-
-            runtime_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-            self.stats_card.stats_table.item(3, 1).setText(runtime_str)
+        # StatsCard已移除,運行時間現在不再顯示
+        # 如果需要顯示運行時間,可以整合到策略狀態顯示中
+        pass
 
     def get_current_time(self):
         """獲取當前時間戳"""
@@ -1655,7 +1714,7 @@ class DashboardPage(QWidget):
         return int(time.time())
 
     def test_sequence(self):
-        """測試點擊順序"""
+        """測試完整配置 - 使用新的ChipProfile + SmartChipPlanner"""
         if not self.engine_worker:
             self.log_viewer.add_log("ERROR", "Dashboard", "引擎未初始化")
             return
@@ -1670,16 +1729,70 @@ class DashboardPage(QWidget):
             self.log_viewer.add_log("WARNING", "Dashboard", "⚠️ 請先停止檢測模式再進行測試")
             return
 
-        # 設置測試標志，防止檢測系統干擾
-        self.is_triggering = True
-        self.log_viewer.add_log("INFO", "Dashboard", "🧪 開始測試點擊順序...")
+        # 1. 配置驗證
+        from src.utils.config_validator import ConfigValidator
+        validator = ConfigValidator()
+        results = validator.validate_all()
 
+        if not results['overall'].complete:
+            # 顯示缺失項目並引導
+            missing_modules = []
+            for module, result in results.items():
+                if module != 'overall' and not result.complete:
+                    missing_modules.append(f"• {module}: {result.message}")
+
+            QMessageBox.warning(
+                self, "配置不完整",
+                "請先完成以下配置:\n\n" + "\n".join(missing_modules) +
+                "\n\n點擊確定後，配置狀態卡片會引導您完成設定。"
+            )
+            self.log_viewer.add_log("WARNING", "Test", "配置不完整，無法執行測試")
+            return
+
+        # 2. 載入ChipProfile
         try:
+            from src.autobet.chip_profile_manager import ChipProfileManager
+            from src.autobet.chip_planner import SmartChipPlanner
+
+            manager = ChipProfileManager()
+            chip_profile = manager.load_profile("default")
+
+            # 獲取已校準的籌碼列表
+            calibrated_chips = chip_profile.get_calibrated_chips()
+            if not calibrated_chips:
+                raise ValueError("沒有已校準的籌碼，請先校準籌碼位置")
+
+            # 3. 生成測試計劃
+            planner = SmartChipPlanner(calibrated_chips)
+            test_amount = 1100  # 測試金額: 1100元
+
+            plan = planner.plan_bet(test_amount, max_clicks=8)
+
+            # 4. 顯示測試計劃
+            chips_str = " + ".join([f"{c.value}元" for c in plan.chips])
+            total_clicks = len(plan.chips) + 2  # 籌碼點擊 + 下注 + 確認
+
+            self.log_viewer.add_log(
+                "INFO", "Test",
+                f"🧪 測試計劃: {test_amount}元 = {chips_str}"
+            )
+            self.log_viewer.add_log(
+                "INFO", "Test",
+                f"📊 總點擊次數: {total_clicks} (籌碼{len(plan.chips)}次 + 下注1次 + 確認1次)"
+            )
+
+            # 5. 設置測試標志
+            self.is_triggering = True
+
+            # 6. 執行測試
+            self.log_viewer.add_log("INFO", "Test", "▶️ 開始執行測試序列...")
             self.engine_worker.force_test_sequence()
+
         except Exception as e:
-            self.log_viewer.add_log("ERROR", "Dashboard", f"測試失敗: {e}")
+            self.log_viewer.add_log("ERROR", "Test", f"測試失敗: {e}")
+            QMessageBox.critical(self, "測試失敗", f"執行測試時發生錯誤:\n{e}")
         finally:
-            # 3秒後重置標志（測試序列較短）
+            # 3秒後重置標志
             QTimer.singleShot(3000, self._reset_triggering_flag)
 
     def setup_direct_detection(self):

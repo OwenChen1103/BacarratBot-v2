@@ -404,6 +404,14 @@ class LineOrchestrator:
             tracker = self.signal_trackers[strategy_key]
             tracker.record(table_id, round_id, winner_code or "", timestamp)
 
+            # 記錄關鍵事件：開獎結果和歷史記錄
+            history_after = tracker._get_recent_winners(table_id, 10)
+            self._record_event(
+                "INFO",
+                f"📊 策略 {strategy_key} | 桌號 {table_id} | 開獎 {winner_code} | 歷史記錄 {history_after}",
+                {"table": table_id},
+            )
+
             pending_key = (table_id, round_id, strategy_key)
             position = self._pending.pop(pending_key, None)
             if not position:
@@ -538,8 +546,30 @@ class LineOrchestrator:
                 continue
 
             # 檢查信號觸發
-            if not tracker.should_trigger(table_id, round_id, timestamp):
+            should_trigger_result = tracker.should_trigger(table_id, round_id, timestamp)
+
+            # DEBUG: 記錄 SignalTracker 的歷史和檢查結果
+            required_length = len(tracker._pattern_sequence(definition.entry.pattern))
+            all_history = tracker.history.get(table_id)
+            history_list = list(all_history) if all_history else []
+            recent_winners = tracker._get_recent_winners(table_id, required_length)
+
+            if not should_trigger_result:
+                # 顯示策略檢查狀態（未觸發）
+                if len(history_list) > 0:
+                    self._record_event(
+                        "INFO",
+                        f"⏳ 策略 {strategy_key} | 模式 {definition.entry.pattern} | 歷史長度 {len(history_list)}/{required_length} | 近期 {recent_winners} | ❌ 未觸發",
+                        {"table": table_id},
+                    )
                 continue
+
+            # 顯示策略觸發
+            self._record_event(
+                "INFO",
+                f"✅ 策略 {strategy_key} 觸發！| 模式 {definition.entry.pattern} | 歷史 {recent_winners}",
+                {"table": table_id},
+            )
 
             # 記錄信號觸發事件
             line_metrics = self.metrics.get_or_create_line_metrics(

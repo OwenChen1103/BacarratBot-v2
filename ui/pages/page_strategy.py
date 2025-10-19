@@ -46,6 +46,8 @@ from src.autobet.lines.config import (
     load_strategy_definitions,
     parse_strategy_definition,
 )
+from src.autobet.chip_planner import Chip, SmartChipPlanner, BettingPolicy
+from src.autobet.chip_profile_manager import ChipProfileManager
 
 from ..app_state import emit_toast
 
@@ -341,8 +343,70 @@ class StrategyPage(QWidget):
 
     def _build_staking_section(self) -> None:
         group = QGroupBox("注碼序列")
-        form = QFormLayout(group)
+        layout = QVBoxLayout(group)
+
+        # 模式切換（金額/單位）
+        mode_layout = QHBoxLayout()
+        mode_label = QLabel("序列模式:")
+        mode_label.setStyleSheet("font-weight: bold; color: #f3f4f6;")
+        self.mode_amount_radio = QPushButton("💰 金額模式 (推薦)")
+        self.mode_unit_radio = QPushButton("🔢 單位模式 (進階)")
+
+        self.mode_amount_radio.setCheckable(True)
+        self.mode_unit_radio.setCheckable(True)
+        self.mode_amount_radio.setChecked(True)
+
+        for btn in [self.mode_amount_radio, self.mode_unit_radio]:
+            btn.setStyleSheet("""
+                QPushButton {
+                    padding: 8px 16px;
+                    border-radius: 6px;
+                    background-color: #374151;
+                    color: #9ca3af;
+                    border: 2px solid #374151;
+                }
+                QPushButton:checked {
+                    background-color: #2563eb;
+                    color: #ffffff;
+                    border: 2px solid #3b82f6;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #4b5563;
+                }
+            """)
+
+        self.mode_amount_radio.clicked.connect(lambda: self._switch_mode("amount"))
+        self.mode_unit_radio.clicked.connect(lambda: self._switch_mode("unit"))
+
+        mode_layout.addWidget(mode_label)
+        mode_layout.addWidget(self.mode_amount_radio)
+        mode_layout.addWidget(self.mode_unit_radio)
+        mode_layout.addStretch()
+        layout.addLayout(mode_layout)
+
+        # 單位模式的基礎單位設定
+        self.base_unit_container = QWidget()
+        base_unit_layout = QHBoxLayout(self.base_unit_container)
+        base_unit_layout.setContentsMargins(0, 0, 0, 0)
+        base_unit_label = QLabel("基礎單位:")
+        self.base_unit_spinbox = QSpinBox()
+        self.base_unit_spinbox.setRange(100, 100000)
+        self.base_unit_spinbox.setValue(100)
+        self.base_unit_spinbox.setSuffix(" 元")
+        self.base_unit_spinbox.valueChanged.connect(self._update_recipe_preview)
+        base_unit_layout.addWidget(base_unit_label)
+        base_unit_layout.addWidget(self.base_unit_spinbox)
+        base_unit_layout.addStretch()
+        self.base_unit_container.setVisible(False)  # 預設隱藏
+        layout.addWidget(self.base_unit_container)
+
+        # 序列輸入
+        form = QFormLayout()
         self.sequence_edit = QLineEdit()
+        self.sequence_edit.setPlaceholderText("例: 1000, 2000, 4000, 8000")
+        self.sequence_edit.textChanged.connect(self._update_recipe_preview)
+
         self.advance_combo = QComboBox()
         for rule in AdvanceRule:
             self.advance_combo.addItem(ADVANCE_LABELS[rule], rule.value)
@@ -365,7 +429,53 @@ class StrategyPage(QWidget):
         form.addRow("最大層數:", self.max_layers)
         form.addRow("單手上限:", self.per_hand_cap)
         form.addRow("同手策略:", self.stack_policy)
+        layout.addLayout(form)
+
+        # 即時配方預覽
+        preview_group = QGroupBox("📋 即時下注配方預覽")
+        preview_group.setStyleSheet("""
+            QGroupBox {
+                background-color: #1f2937;
+                border: 2px solid #3b82f6;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 12px;
+                font-weight: bold;
+                color: #60a5fa;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        preview_layout = QVBoxLayout(preview_group)
+
+        self.recipe_preview_label = QLabel("請輸入序列以查看配方...")
+        self.recipe_preview_label.setWordWrap(True)
+        self.recipe_preview_label.setStyleSheet("""
+            QLabel {
+                color: #d1d5db;
+                padding: 12px;
+                background-color: #111827;
+                border-radius: 6px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 10pt;
+            }
+        """)
+        preview_layout.addWidget(self.recipe_preview_label)
+
+        layout.addWidget(preview_group)
+
         self.detail_layout.addWidget(group)
+
+        # 初始化 ChipProfileManager
+        try:
+            self.chip_profile_manager = ChipProfileManager()
+            self.chip_profile = self.chip_profile_manager.load_profile()
+        except Exception as e:
+            print(f"載入 ChipProfile 失敗: {e}")
+            self.chip_profile = None
 
     def _build_cross_table_section(self) -> None:
         group = QGroupBox("跨桌設定")
@@ -644,3 +754,100 @@ class StrategyPage(QWidget):
         if self.risk_table.rowCount() == 0:
             return
         self.risk_table.removeRow(self.risk_table.rowCount() - 1)
+
+    # ------------------------------------------------------------------
+    # 新增: 模式切換與配方預覽邏輯
+    # ------------------------------------------------------------------
+
+    def _switch_mode(self, mode: str) -> None:
+        """切換金額/單位模式"""
+        if mode == "amount":
+            self.mode_amount_radio.setChecked(True)
+            self.mode_unit_radio.setChecked(False)
+            self.base_unit_container.setVisible(False)
+            self.sequence_edit.setPlaceholderText("例: 1000, 2000, 4000, 8000")
+        else:  # unit
+            self.mode_amount_radio.setChecked(False)
+            self.mode_unit_radio.setChecked(True)
+            self.base_unit_container.setVisible(True)
+            self.sequence_edit.setPlaceholderText("例: 10, 20, 40, 80")
+
+        self._update_recipe_preview()
+
+    def _update_recipe_preview(self) -> None:
+        """更新配方預覽"""
+        try:
+            # 解析序列
+            sequence_text = self.sequence_edit.text().strip()
+            if not sequence_text:
+                self.recipe_preview_label.setText("請輸入序列以查看配方...")
+                return
+
+            sequence = [int(x.strip()) for x in sequence_text.split(",") if x.strip()]
+            if not sequence:
+                self.recipe_preview_label.setText("請輸入有效的數字序列")
+                return
+
+            # 判斷模式並計算實際金額
+            is_amount_mode = self.mode_amount_radio.isChecked()
+            if is_amount_mode:
+                amounts = sequence
+            else:
+                # 單位模式：乘以基礎單位
+                base_unit = self.base_unit_spinbox.value()
+                amounts = [x * base_unit for x in sequence]
+
+            # 載入 ChipProfile 並建立 Planner
+            if not self.chip_profile:
+                self.recipe_preview_label.setText(
+                    "⚠️ 未載入籌碼組合\n"
+                    "請先在「籌碼設定」頁面設定並校準籌碼"
+                )
+                return
+
+            calibrated_chips = self.chip_profile.get_calibrated_chips()
+            if not calibrated_chips:
+                self.recipe_preview_label.setText(
+                    "⚠️ 沒有已校準的籌碼\n"
+                    "請先在「籌碼設定」頁面校準至少一顆籌碼"
+                )
+                return
+
+            planner = SmartChipPlanner(calibrated_chips, BettingPolicy())
+
+            # 生成配方預覽
+            preview_lines = []
+            max_clicks = self.chip_profile.constraints.get("max_clicks_per_hand", 8)
+
+            for i, amount in enumerate(amounts, 1):
+                plan = planner.plan_bet(amount, max_clicks=max_clicks)
+
+                if plan.success:
+                    if not is_amount_mode:
+                        preview_lines.append(
+                            f"第 {i} 層 ({sequence[i-1]} 單位 = {amount} 元)"
+                        )
+                    else:
+                        preview_lines.append(f"第 {i} 層 ({amount} 元)")
+
+                    preview_lines.append(f"  → {plan.recipe}")
+
+                    if plan.warnings:
+                        for warning in plan.warnings:
+                            preview_lines.append(f"  ⚠️  {warning}")
+                else:
+                    preview_lines.append(f"第 {i} 層 ({amount} 元)")
+                    preview_lines.append(f"  ❌ {plan.reason}")
+
+                preview_lines.append("")  # 空行分隔
+
+            # 移除最後的空行
+            if preview_lines and preview_lines[-1] == "":
+                preview_lines.pop()
+
+            self.recipe_preview_label.setText("\n".join(preview_lines))
+
+        except ValueError:
+            self.recipe_preview_label.setText("❌ 序列格式錯誤\n請輸入逗號分隔的數字")
+        except Exception as e:
+            self.recipe_preview_label.setText(f"❌ 配方預覽錯誤:\n{str(e)}")

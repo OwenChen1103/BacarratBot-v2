@@ -5,6 +5,7 @@ from typing import Optional, Callable, Dict, Any, Tuple, List
 from PySide6.QtCore import QThread, Signal
 
 from src.autobet.autobet_engine import AutoBetEngine
+from src.autobet.chip_profile_manager import ChipProfileManager
 from ipc.t9_stream import T9StreamClient
 from src.autobet.lines import (
     LineOrchestrator,
@@ -113,6 +114,7 @@ class EngineWorker(QThread):
     risk_alert = Signal(str, str)
     log_message = Signal(str, str, str)
     engine_status = Signal(dict)
+    next_bet_info = Signal(dict)  # 即時下注詳情更新
 
     def __init__(self):
         super().__init__()
@@ -132,16 +134,29 @@ class EngineWorker(QThread):
         self._line_orchestrator: Optional[LineOrchestrator] = None
         self._line_order_queue: "queue.Queue[BetDecision]" = queue.Queue()
         self._line_summary: Dict[str, Any] = {}
+        self._selected_table: Optional[str] = None  # 使用者選擇的桌號
         base_dir = Path("data/sessions")
         base_dir.mkdir(parents=True, exist_ok=True)
         self._line_state_path = base_dir / "line_state.json"
         self._line_orders_path = base_dir / "line_orders.ndjson"
         # 移除檢測相關狀態，檢測邏輯由 Dashboard 處理
 
+        # ChipProfile 管理器
+        self._chip_profile_manager = ChipProfileManager()
+
     def initialize_engine(self, dry_run: bool = True) -> bool:
         """初始化引擎並載入配置"""
         try:
-            self.engine = AutoBetEngine(dry_run=dry_run)
+            # 載入 ChipProfile
+            chip_profile = None
+            try:
+                chip_profile = self._chip_profile_manager.load_profile("default")
+                self._emit_log("INFO", "Engine", f"✅ ChipProfile 載入成功: {chip_profile.profile_name}")
+            except Exception as e:
+                self._emit_log("WARNING", "Engine", f"⚠️ ChipProfile 載入失敗: {e}，將使用舊系統")
+
+            # 初始化引擎，傳入 ChipProfile
+            self.engine = AutoBetEngine(dry_run=dry_run, chip_profile=chip_profile)
             self.engine.set_log_callback(self._emit_log)  # 設置日誌回調
             self._dry_run = dry_run
             self._emit_log("INFO", "Engine", "引擎已初始化")
@@ -158,8 +173,8 @@ class EngineWorker(QThread):
             self._tick_running = True
             self._init_line_orchestrator()
 
-            # 啟動結果流監聽（若配置允許）
-            self._setup_result_stream()
+            # 不在初始化時啟動T9連線，等到start_engine()時才啟動
+            # self._setup_result_stream()  # 移到 start_engine()
 
             # 發送初始狀態
             self.state_changed.emit("idle")
@@ -236,8 +251,10 @@ class EngineWorker(QThread):
             return False
 
         try:
-            # 確保結果流已啟動
-            self._setup_result_stream()
+            # 啟動T9結果流（引擎啟動時才連線）
+            if not self._t9_client:
+                self._setup_result_stream()
+                self._emit_log("INFO", "Engine", "✅ T9結果流已啟動")
 
             # 檢查是否需要重新載入配置（如果已經載入過就跳過）
             if not hasattr(self.engine, 'overlay') or not self.engine.overlay:
@@ -367,13 +384,35 @@ class EngineWorker(QThread):
             round_id = event.get("round_id")
 
             if event_type == "RESULT":
+                # 只處理選定桌號的事件（使用 mapping）
+                if not self._is_selected_table(table_id):
+                    return  # 靜默忽略非選定桌號
+
+                self._emit_log("DEBUG", "Engine", f"🎲 處理 RESULT: table={table_id} round={round_id} winner={winner}")
+
                 if self._line_orchestrator and table_id and round_id:
                     ts_raw = event.get("received_at")
                     if isinstance(ts_raw, (int, float)):
                         ts_sec = float(ts_raw) / 1000.0 if ts_raw > 1e6 else float(ts_raw)
                     else:
                         ts_sec = time.time()
+
+                    self._emit_log("DEBUG", "Engine", f"📞 調用 handle_result: table={table_id} winner={winner}")
                     self._line_orchestrator.handle_result(table_id, round_id, winner, ts_sec)
+                    self._line_summary = self._line_orchestrator.snapshot()
+                    self._save_line_state()
+                    self._flush_line_events()
+
+                    # WORKAROUND: T9 可能不會發送 betting 階段事件
+                    # 在 RESULT 後立即觸發 BETTABLE 階段檢查，模擬下一局開始下注
+                    # 這樣可以讓 LineOrchestrator 檢查是否滿足策略條件
+                    next_round_id = f"{round_id}_next"  # 模擬下一局的 round_id
+                    decisions = self._line_orchestrator.update_table_phase(
+                        table_id, next_round_id, TablePhase.BETTABLE, ts_sec + 1.0
+                    )
+                    if decisions:
+                        self._emit_log("INFO", "Line", f"✅ 檢測到觸發條件，產生 {len(decisions)} 個下注決策")
+                        self._handle_line_decisions(decisions)
                     self._line_summary = self._line_orchestrator.snapshot()
                     self._save_line_state()
                     self._flush_line_events()
@@ -442,6 +481,12 @@ class EngineWorker(QThread):
         self._latest_results.pop(table_key, None)
         self._latest_results[table_key] = info
 
+        # 如果有 mapping，也用 mapped 的 key 儲存一份
+        mapped_key = TABLE_DISPLAY_MAP.get(table_key)
+        if mapped_key:
+            self._latest_results.pop(mapped_key, None)
+            self._latest_results[mapped_key] = info.copy()
+
         max_tables = 20
         while len(self._latest_results) > max_tables:
             first_key = next(iter(self._latest_results))
@@ -481,6 +526,33 @@ class EngineWorker(QThread):
             return None
         return TABLE_DISPLAY_MAP.get(str(table_id), None)
 
+    def _is_selected_table(self, table_id: Optional[str]) -> bool:
+        """檢查桌號是否為選定桌號（考慮 mapping）"""
+        if not self._selected_table:
+            return True
+
+        if not table_id:
+            return False
+
+        table_id_str = str(table_id)
+        selected = str(self._selected_table)
+
+        # 直接匹配
+        if table_id_str == selected:
+            return True
+
+        # T9發 WG7，用戶選 BG_131
+        mapped = TABLE_DISPLAY_MAP.get(table_id_str)
+        if mapped and mapped == selected:
+            return True
+
+        # 用戶選 BG_131，T9發 WG7
+        for src, dst in TABLE_DISPLAY_MAP.items():
+            if src == table_id_str and dst == selected:
+                return True
+
+        return False
+
     # ------------------------------------------------------------------
     @staticmethod
     def _normalize_text(value: Optional[Any]) -> str:
@@ -501,6 +573,15 @@ class EngineWorker(QThread):
 
     # ------------------------------------------------------------------
     def _emit_table_log(self, level: str, table_id: Optional[str], message: str, module: str = "Result") -> None:
+        # 只處理選定桌號的日誌（使用 mapping）
+        if not self._is_selected_table(table_id):
+            return  # 靜默忽略非選定桌號的日誌
+
+        # 過濾不必要的狀態訊息（停止下注、投注中等）
+        skip_messages = ["狀態：停止下注", "狀態：投注中", "狀態：派彩中", "狀態：局已結束", "狀態：開獎中"]
+        if any(skip in message for skip in skip_messages):
+            return
+
         prefix = ""
         if table_id:
             table_id_str = str(table_id)
@@ -663,6 +744,11 @@ class EngineWorker(QThread):
 
         threading.Thread(target=_run, name="TriggerClickSequence", daemon=True).start()
 
+    def set_selected_table(self, table_id: str):
+        """設定選定的桌號"""
+        self._selected_table = table_id
+        self._emit_log("INFO", "Strategy", f"🎯 開始追蹤桌號: {table_id}")
+
     def quit(self):
         self._tick_running = False
         self.stop_engine()
@@ -689,11 +775,12 @@ class EngineWorker(QThread):
                 max_concurrent_tables=max_tables,
                 min_unit=min_unit,
             )
+
             if strategy_dir.exists():
                 definitions = load_strategy_definitions(strategy_dir)
                 for definition in definitions.values():
                     self._line_orchestrator.register_strategy(definition)
-                self._emit_log("INFO", "Line", f"載入 {len(definitions)} 條 Line 策略")
+                self._emit_log("INFO", "Strategy", f"✅ 載入 {len(definitions)} 條策略")
             else:
                 self._emit_log(
                     "WARNING",
@@ -709,7 +796,7 @@ class EngineWorker(QThread):
                 self._line_summary = {}
         except Exception as exc:
             self._line_orchestrator = None
-            self._emit_log("ERROR", "Line", f"策略系統初始化失敗: {exc}")
+            self._emit_log("ERROR", "Strategy", f"❌ 策略系統初始化失敗: {exc}")
 
     # ------------------------------------------------------------------
     def _load_line_state(self) -> None:
@@ -719,9 +806,8 @@ class EngineWorker(QThread):
             data = json.loads(self._line_state_path.read_text(encoding="utf-8"))
             self._line_orchestrator.restore_state(data)
             self._line_summary = self._line_orchestrator.snapshot()
-            self._emit_log("INFO", "Line", "Line 狀態已恢復")
         except Exception as exc:
-            self._emit_log("ERROR", "Line", f"恢復 Line 狀態失敗: {exc}")
+            self._emit_log("ERROR", "Strategy", f"❌ 恢復策略狀態失敗: {exc}")
 
     def _save_line_state(self) -> None:
         if not self._line_orchestrator:
@@ -742,10 +828,11 @@ class EngineWorker(QThread):
         if self._t9_client:
             return
 
-        base_url = os.getenv("T9_STREAM_URL", "http://127.0.0.1:8000/api/stream").strip()
+        base_url = os.getenv("T9_STREAM_URL", "").strip()
         if not base_url:
-            self._emit_log("WARNING", "Result", "T9_STREAM_URL 未設定，結果流未啟動")
-            return
+            base_url = "http://127.0.0.1:8000/api/stream"  # 預設值
+            self._emit_log("WARNING", "T9Stream", f"⚠️ T9_STREAM_URL 未設定，使用預設: {base_url}")
+            self._emit_log("WARNING", "T9Stream", "請確認 T9 Web API 伺服器已啟動，否則無法接收開獎結果！")
 
         event_types = os.getenv("T9_STREAM_EVENT_TYPES", "result")
 
@@ -776,8 +863,11 @@ class EngineWorker(QThread):
             on_status=self._on_t9_status,
         )
 
-        self._emit_log("INFO", "Result", f"嘗試連線 T9 結果流: {base_url}")
+        self._emit_log("INFO", "T9Stream", f"🔌 正在連線: {base_url}")
         self._t9_client.start()
+
+        # 提示用戶檢查連線狀態
+        self._emit_log("INFO", "T9Stream", "請確認 T9 Web API 伺服器正在運行，否則無法收到開獎結果")
 
     # ------------------------------------------------------------------
     def _drain_incoming_events(self) -> None:
@@ -790,8 +880,6 @@ class EngineWorker(QThread):
             else:
                 processed += 1
                 self._handle_event(evt)
-        if processed:
-            self._emit_log("DEBUG", "Result", f"處理 {processed} 筆結果事件")
         self._drain_line_orders_queue()
 
     # ------------------------------------------------------------------
@@ -801,21 +889,22 @@ class EngineWorker(QThread):
         self._t9_status = status
 
         if status == "connecting":
-            self._emit_log("INFO", "Result", f"連線 T9 流... {detail or ''}")
+            self._emit_log("INFO", "T9Stream", f"🔄 連線中... {detail or ''}")
         elif status == "connected":
-            self._emit_log("INFO", "Result", "✅ T9 結果流已連線")
+            self._emit_log("INFO", "T9Stream", "✅ 已連線，等待開獎結果...")
         elif status == "error":
-            self._emit_log("WARNING", "Result", f"T9 結果流錯誤: {detail}")
+            self._emit_log("ERROR", "T9Stream", f"❌ 連線錯誤: {detail}")
         elif status == "disconnected":
-            self._emit_log("INFO", "Result", "T9 結果流已斷線，準備重新連線")
+            self._emit_log("WARNING", "T9Stream", "⚠️ 已斷線，準備重新連線...")
         elif status == "stopped":
-            self._emit_log("INFO", "Result", "T9 結果流已停止")
+            self._emit_log("INFO", "T9Stream", "⏹️ 已停止")
 
     # ------------------------------------------------------------------
     def _on_t9_raw_event(self, event_name: str, payload: Dict[str, Any]) -> None:
         event_type = (payload.get("event_type") or event_name or "").lower()
+
         if event_type != "result":
-            # 忽略 heartbeat / 其他事件
+            # 忽略 heartbeat / 其他事件（靜默）
             return
 
         record: Optional[Dict[str, Any]] = None
@@ -825,8 +914,12 @@ class EngineWorker(QThread):
             record = payload.get("record")
 
         if not isinstance(record, dict):
-            self._emit_log("DEBUG", "Result", "skip unknown T9 record format")
             return
+
+        # 只處理選定桌號的事件（提前過濾）
+        table_id = record.get("table_id") or record.get("tableId") or record.get("table")
+        if not self._is_selected_table(table_id):
+            return  # 靜默忽略非選定桌號
 
         event, info = self._convert_t9_record_to_event(record)
         if info:
@@ -835,21 +928,32 @@ class EngineWorker(QThread):
             self._process_line_state(info)
 
         if event:
+            self._emit_log("DEBUG", "T9Stream", f"✅ 產生 RESULT event: table={event.get('table_id')} winner={event.get('winner')}")
             self._incoming_events.put(event)
+        else:
+            self._emit_log("DEBUG", "T9Stream", f"⚠️ 未產生 event (可能是狀態更新而非開獎)")
     # ------------------------------------------------------------------
     def _process_line_state(self, info: Dict[str, Any]) -> None:
         if not self._line_orchestrator:
+            self._emit_log("ERROR", "Line", "❌ _line_orchestrator 是 None，無法處理 Line 狀態！")
             return
         table_id = info.get("table_id")
         if not table_id:
             return
-        phase = self._map_stage_to_phase(info.get("stage"))
+
+        # 只處理選定桌號的階段事件（使用 mapping）
+        if not self._is_selected_table(table_id):
+            return  # 靜默忽略非選定桌號
+
+        stage = info.get("stage")
+        phase = self._map_stage_to_phase(stage)
         round_id = info.get("round_id")
         ts_raw = info.get("received_at")
         if isinstance(ts_raw, (int, float)):
             timestamp = float(ts_raw) / 1000.0 if ts_raw > 1e6 else float(ts_raw)
         else:
             timestamp = time.time()
+
         if phase:
             decisions = self._line_orchestrator.update_table_phase(table_id, round_id, phase, timestamp)
             if decisions:
@@ -932,12 +1036,114 @@ class EngineWorker(QThread):
 
     # ------------------------------------------------------------------
     def _dispatch_line_order(self, decision: BetDecision) -> None:
-        # TODO: Integrate with AutoBetEngine for automated execution
+        """執行 Line 策略產生的下注決策"""
         self._emit_log(
             "INFO",
             "Line",
-            f"待執行 Line 訂單: {decision.strategy_key} -> {decision.table_id} amount={decision.amount}",
+            f"📋 執行 Line 訂單: {decision.strategy_key} -> table {decision.table_id} {decision.direction.value} ${decision.amount}",
         )
+
+        if not self.engine:
+            self._emit_log("ERROR", "Line", "引擎未初始化，無法執行訂單")
+            return
+
+        # 將 BetDecision 轉換成 AutobetEngine 可以執行的格式
+        try:
+            # 轉換方向：BetDirection -> target string
+            direction_map = {
+                "BANKER": "banker",
+                "PLAYER": "player",
+                "TIE": "tie"
+            }
+            target = direction_map.get(decision.direction.value, decision.direction.value.lower())
+
+            # 檢查下注期是否開放
+            if self._line_orchestrator:
+                # 獲取該桌的當前階段
+                current_phase = self._line_orchestrator.table_phases.get(decision.table_id)
+
+                # 檢查是否在 BETTABLE 階段
+                if current_phase and current_phase != TablePhase.BETTABLE:
+                    self._emit_log(
+                        "WARNING",
+                        "Line",
+                        f"⚠️ 下注期未開放 (當前階段: {current_phase.name})，跳過訂單"
+                    )
+                    return
+
+            # 構建下注計畫
+            from src.autobet.chip_planner import SmartChipPlanner
+
+            if self.engine.smart_planner:
+                # 使用 SmartChipPlanner 規劃籌碼組合
+                bet_plan = self.engine.smart_planner.plan_bet(
+                    target_amount=decision.amount,
+                    max_clicks=self.engine.chip_profile.constraints.get("max_clicks_per_hand", 8) if self.engine.chip_profile else 8
+                )
+
+                if not bet_plan.success:
+                    self._emit_log("ERROR", "Line", f"❌ 籌碼規劃失敗: {bet_plan.reason}")
+                    return
+
+                # 獲取當前層數資訊
+                current_layer_info = "N/A"
+                total_layers = "N/A"
+                if self._line_orchestrator:
+                    for line_state in self._line_orchestrator.line_states.values():
+                        if line_state.strategy_key == decision.strategy_key:
+                            current_layer_info = decision.layer_index + 1
+                            if line_state.progression and line_state.progression.sequence:
+                                total_layers = len(line_state.progression.sequence)
+                            break
+
+                # 發送即時更新到 NextBetCard
+                self.next_bet_info.emit({
+                    'table_id': decision.table_id,
+                    'strategy': decision.strategy_key,
+                    'layer': f"{current_layer_info}/{total_layers}",
+                    'direction': target,
+                    'amount': decision.amount,
+                    'recipe': bet_plan.description
+                })
+
+                # 構建點擊計畫：[(target, chip_name), ...]
+                click_plan = []
+                for chip, count in bet_plan.recipe.items():
+                    chip_name = f"chip_{chip.value}"  # 例如 chip_100, chip_1000
+                    for _ in range(count):
+                        click_plan.append((target, chip_name))
+
+                self._emit_log(
+                    "INFO",
+                    "Line",
+                    f"✅ 籌碼配方: {bet_plan.description} (點擊{len(click_plan)}次)"
+                )
+
+                # 執行下注序列
+                if self.engine.act:
+                    try:
+                        # 依序執行每個籌碼的放置
+                        for chip, count in bet_plan.recipe.items():
+                            for _ in range(count):
+                                # 點擊籌碼
+                                if not self.engine.act.click_chip_value(chip.value):
+                                    raise Exception(f"點擊籌碼 {chip.value} 失敗")
+                                # 點擊下注區
+                                if not self.engine.act.click_bet(target):
+                                    raise Exception(f"點擊下注區 {target} 失敗")
+
+                        # 確認下注
+                        self.engine.act.confirm()
+                        self._emit_log("INFO", "Line", f"✅ 訂單執行完成: {decision.strategy_key}")
+                    except Exception as e:
+                        self._emit_log("ERROR", "Line", f"❌ 執行下注失敗: {e}")
+                else:
+                    self._emit_log("ERROR", "Line", "Actuator 未初始化")
+            else:
+                self._emit_log("ERROR", "Line", "SmartChipPlanner 未初始化，無法執行訂單")
+
+        except Exception as e:
+            self._emit_log("ERROR", "Line", f"處理 Line 訂單錯誤: {e}")
 
     # ------------------------------------------------------------------
     def _convert_t9_record_to_event(self, record: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:

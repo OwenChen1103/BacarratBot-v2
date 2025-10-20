@@ -17,6 +17,7 @@ from PySide6.QtGui import QFont, QTextCursor, QColor, QPalette
 from ..workers.engine_worker import EngineWorker
 from ..components.next_bet_card import NextBetCard
 
+# 桌號映射: canonical_id -> display_name (僅供 UI 顯示)
 TABLE_ID_DISPLAY_MAP = {
     "WG7": "BG_131",
     "WG8": "BG_132",
@@ -25,6 +26,8 @@ TABLE_ID_DISPLAY_MAP = {
     "WG11": "BG_136",
     "WG12": "BG_137",
     "WG13": "BG_138",
+    "WG14": "BG_139",
+    "WG15": "BG_140",
 }
 
 TABLE_TAG_RE = re.compile(r"\[table=([^\]]+)\]")
@@ -144,17 +147,10 @@ class StatusCard(QFrame):
             """)
 
 class ResultCard(QFrame):
-    """顯示單桌最新開獎結果的卡片"""
-
-    table_selected = Signal(str)
+    """顯示最新開獎結果的卡片（單桌模式）"""
 
     def __init__(self):
         super().__init__()
-        # 固定桌號列表 BG_125 - BG_138
-        self._all_tables: List[str] = [f"BG_{i}" for i in range(125, 139)]
-        self._tables_with_data: set = set()  # 已收到結果的桌號
-        self._current_table = ""
-        self._updating_combo = False
         self._setup_ui()
 
     def _setup_ui(self):
@@ -185,19 +181,7 @@ class ResultCard(QFrame):
         header_layout.addStretch()
         layout.addLayout(header_layout)
 
-        selector_layout = QHBoxLayout()
-        selector_label = QLabel("桌號：")
-        selector_label.setStyleSheet("color: #e5e7eb;")
-        selector_layout.addWidget(selector_label)
-
-        self.combo = NoWheelComboBox()
-        self.combo.setEnabled(True)  # 改為啟用，因為我們有固定列表
-        self.combo.currentIndexChanged.connect(self._on_combo_changed)
-        selector_layout.addWidget(self.combo, 1)
-        layout.addLayout(selector_layout)
-
-        # 初始化固定桌號列表
-        self._init_fixed_tables()
+        # 單桌模式：不需要桌號選擇器
 
         self.status_label = QLabel("狀態：--")
         self.status_label.setStyleSheet("color: #f9fafb; font-size: 9pt; font-weight: bold; background: transparent;")
@@ -226,21 +210,38 @@ class ResultCard(QFrame):
         layout.addWidget(self.detail_label)
         layout.addSpacing(4)
 
+    def _generate_all_tables(self) -> List[str]:
+        tables = [f"BG_{i}" for i in range(125, 131)]
+        tables += [f"WG{i}" for i in range(7, 16)]
+        tables = sorted(tables, key=self._table_sort_key)
+        return tables
+
+    def _table_sort_key(self, table_id: str) -> Tuple[int, str]:
+        if not table_id:
+            return 9999, ""
+        display = TABLE_ID_DISPLAY_MAP.get(table_id, table_id)
+        display_str = str(display)
+        match = re.search(r"(\d+)$", display_str)
+        number = int(match.group(1)) if match else 9999
+        return number, display_str
+
     def _init_fixed_tables(self):
         """初始化固定桌號列表"""
         self._updating_combo = True
         self.combo.clear()
         for table_id in self._all_tables:
-            # 直接顯示桌號，不加後綴
-            self.combo.addItem(table_id, table_id)
+            display = TABLE_ID_DISPLAY_MAP.get(table_id, table_id)
+            label = f"{display} ({table_id})" if display != table_id else display
+            self.combo.addItem(label, table_id)
         self._updating_combo = False
+        self.combo.setCurrentIndex(-1)
 
     def set_stream_status(self, status: Optional[str]):
         mapping = {
-            "connected": ("狀態：已連線", "#10b981"),
-            "connecting": ("狀態：連線中…", "#f59e0b"),
-            "error": ("狀態：連線錯誤", "#ef4444"),
-            "disconnected": ("狀態：已斷線，等待重試", "#f59e0b"),
+            "connected": ("狀態：檢測中", "#10b981"),
+            "connecting": ("狀態：準備中", "#f59e0b"),
+            "error": ("狀態：檢測錯誤", "#ef4444"),
+            "disconnected": ("狀態：等待重試", "#f59e0b"),
             "stopped": ("狀態：已停止", "#9ca3af"),
         }
         text, color = mapping.get(status or "", ("狀態：--", "#9ca3af"))
@@ -248,29 +249,8 @@ class ResultCard(QFrame):
         self.status_label.setStyleSheet(f"color: {color};")
 
     def set_tables(self, tables: List[str]):
-        """更新已收到結果的桌號列表"""
-        tables = list(tables)
-
-        # 檢查是否有新桌號
-        new_tables = set(tables) - self._tables_with_data
-        if not new_tables:
-            # 沒有新桌號，不需要更新
-            return
-
-        # 更新已收到數據的桌號集合
-        self._tables_with_data.update(tables)
-
-        # 如果選單還沒有初始化項目，或者當前沒有選中的桌號，才需要更新選中項
-        if self.combo.count() == 0:
-            # 第一次初始化，選擇第一個有數據的桌號
-            if self._tables_with_data:
-                first_table = min(self._tables_with_data, key=lambda x: int(x.split('_')[1]))
-                index = self._all_tables.index(first_table)
-                self._updating_combo = True
-                self.combo.setCurrentIndex(index)
-                self._current_table = first_table
-                self._updating_combo = False
-                self._emit_selection()
+        """更新已收到結果的桌號列表（單桌模式：忽略）"""
+        pass
 
     def set_result(self, info: Optional[Dict[str, Any]]):
         if not info:
@@ -293,7 +273,7 @@ class ResultCard(QFrame):
         ts = info.get("received_at")
         ts_text = self._format_timestamp(ts)
         table_id = info.get("table_id")
-        display_id = TABLE_ID_DISPLAY_MAP.get(table_id, table_id) if table_id else "--"
+        display_id = info.get("display_table_id") or (TABLE_ID_DISPLAY_MAP.get(table_id, table_id) if table_id else "--")
 
         detail_lines = []
         if display_id and display_id != "--":
@@ -309,11 +289,17 @@ class ResultCard(QFrame):
         return self._current_table or None
 
     def select_table(self, table_id: str) -> None:
-        if not table_id or table_id not in self._tables:
+        if not table_id:
             return
-        target_index = self._tables.index(table_id)
+        target_index = self.combo.findData(table_id)
+        if target_index == -1:
+            return
         if target_index != self.combo.currentIndex():
+            self._updating_combo = True
             self.combo.setCurrentIndex(target_index)
+            self._updating_combo = False
+        self._current_table = table_id
+        self._emit_selection()
 
     def _on_combo_changed(self, index: int) -> None:
         if self._updating_combo:
@@ -322,12 +308,7 @@ class ResultCard(QFrame):
             self._current_table = ""
         else:
             data = self.combo.itemData(index)
-            if isinstance(data, str) and data:
-                self._current_table = data
-            elif 0 <= index < len(self._tables):
-                self._current_table = self._tables[index]
-            else:
-                self._current_table = ""
+            self._current_table = data if isinstance(data, str) and data else ""
         self._emit_selection()
 
     def _emit_selection(self) -> None:
@@ -349,6 +330,190 @@ class ResultCard(QFrame):
             return time.strftime("%H:%M:%S", time.localtime(ts_value))
         except Exception:
             return str(int(ts_value))
+
+
+class ResultsHistoryCard(QFrame):
+    """顯示所有開獎結果歷史的卡片"""
+
+    def __init__(self):
+        super().__init__()
+        self.results_history = []  # 儲存所有結果
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setFrameStyle(QFrame.StyledPanel)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #1f2937;
+                border: 1px solid #374151;
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        # 標題
+        header_layout = QHBoxLayout()
+        icon = QLabel("🎲")
+        icon.setFont(QFont("Segoe UI Emoji", 12))
+        header_layout.addWidget(icon)
+
+        title = QLabel("開獎結果歷史")
+        title.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+        title.setStyleSheet("color: #f9fafb;")
+        header_layout.addWidget(title)
+
+        # 統計信息
+        self.stats_label = QLabel("共 0 局")
+        self.stats_label.setStyleSheet("color: #9ca3af; font-size: 9pt;")
+        header_layout.addStretch()
+        header_layout.addWidget(self.stats_label)
+
+        layout.addLayout(header_layout)
+
+        # 滾動區域
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                background-color: #374151;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #4b5563;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #6b7280;
+            }
+        """)
+
+        # 結果容器
+        scroll_content = QWidget()
+        self.results_layout = QVBoxLayout(scroll_content)
+        self.results_layout.setSpacing(6)
+        self.results_layout.setContentsMargins(0, 0, 0, 0)
+        self.results_layout.addStretch()
+
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll)
+
+    def add_result(self, winner: str, timestamp: float, round_id: str = None):
+        """添加一個新的開獎結果"""
+        # 添加到歷史記錄
+        self.results_history.append({
+            "winner": winner,
+            "timestamp": timestamp,
+            "round_id": round_id
+        })
+
+        # 創建結果項
+        result_item = self._create_result_item(winner, timestamp, round_id, len(self.results_history))
+
+        # 插入到頂部（最新的在上面）
+        self.results_layout.insertWidget(0, result_item)
+
+        # 更新統計
+        self._update_stats()
+
+    def _create_result_item(self, winner: str, timestamp: float, round_id: str, index: int) -> QFrame:
+        """創建單個結果項"""
+        item = QFrame()
+        item.setFrameStyle(QFrame.StyledPanel)
+
+        # 根據結果選擇顏色
+        color_map = {
+            "B": ("#fef2f2", "#dc2626", "莊"),  # 紅色
+            "P": ("#eff6ff", "#2563eb", "閒"),  # 藍色
+            "T": ("#f0fdf4", "#16a34a", "和"),  # 綠色
+        }
+        bg_color, text_color, label = color_map.get(winner, ("#f3f4f6", "#6b7280", "?"))
+
+        item.setStyleSheet(f"""
+            QFrame {{
+                background-color: {bg_color};
+                border: 1px solid {text_color};
+                border-radius: 6px;
+                padding: 8px;
+            }}
+        """)
+
+        layout = QHBoxLayout(item)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(8)
+
+        # 序號
+        index_label = QLabel(f"#{index}")
+        index_label.setFont(QFont("Consolas", 9, QFont.Bold))
+        index_label.setStyleSheet(f"color: {text_color}; background: transparent;")
+        index_label.setFixedWidth(40)
+        layout.addWidget(index_label)
+
+        # 結果圖標和文字
+        result_label = QLabel(f"🎲 {label}")
+        result_label.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+        result_label.setStyleSheet(f"color: {text_color}; background: transparent;")
+        layout.addWidget(result_label)
+
+        layout.addStretch()
+
+        # 時間
+        time_str = time.strftime("%H:%M:%S", time.localtime(timestamp))
+        time_label = QLabel(time_str)
+        time_label.setFont(QFont("Consolas", 9))
+        time_label.setStyleSheet(f"color: {text_color}; background: transparent;")
+        layout.addWidget(time_label)
+
+        # 局號（如果有）
+        if round_id:
+            round_label = QLabel(f"局:{round_id[:8]}")
+            round_label.setFont(QFont("Consolas", 8))
+            round_label.setStyleSheet(f"color: {text_color}; background: transparent;")
+            layout.addWidget(round_label)
+
+        return item
+
+    def _update_stats(self):
+        """更新統計信息"""
+        total = len(self.results_history)
+        banker_count = sum(1 for r in self.results_history if r["winner"] == "B")
+        player_count = sum(1 for r in self.results_history if r["winner"] == "P")
+        tie_count = sum(1 for r in self.results_history if r["winner"] == "T")
+
+        stats_text = f"共 {total} 局 | 莊:{banker_count} 閒:{player_count} 和:{tie_count}"
+        self.stats_label.setText(stats_text)
+
+    def clear_history(self):
+        """清空歷史記錄"""
+        self.results_history.clear()
+
+        # 清空 UI
+        while self.results_layout.count() > 1:  # 保留最後的 stretch
+            item = self.results_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._update_stats()
+
+    def load_history(self, results: list):
+        """載入歷史記錄（從 preload）"""
+        self.clear_history()
+        for result in results:
+            winner = result.get("winner")
+            timestamp = result.get("timestamp", time.time())
+            round_id = result.get("round_id")
+            if winner:
+                self.add_result(winner, timestamp, round_id)
 
 
 class LineSummaryCard(QFrame):
@@ -1205,8 +1370,16 @@ class DashboardPage(QWidget):
         tab2_layout.addWidget(self.next_bet_card)
         tab2_layout.addStretch()
 
+        # Tab 3: 開獎結果
+        tab3 = QWidget()
+        tab3_layout = QVBoxLayout(tab3)
+        tab3_layout.setContentsMargins(8, 8, 8, 8)
+        self.results_history_card = ResultsHistoryCard()
+        tab3_layout.addWidget(self.results_history_card)
+
         tabs.addTab(tab1, "🎯 策略狀態")
         tabs.addTab(tab2, "📌 即將下注")
+        tabs.addTab(tab3, "🎲 開獎結果")
 
         right_layout.addWidget(tabs, 1)  # 給予彈性空間
 
@@ -1354,9 +1527,6 @@ class DashboardPage(QWidget):
         self.engine_worker.engine_status.connect(self.on_engine_status)
         self.engine_worker.next_bet_info.connect(self.on_next_bet_info)
 
-        # 連接結果卡片信號
-        self.result_card.table_selected.connect(self.on_result_table_selected)
-
         # 啟動工作執行緒
         self.engine_worker.start()
 
@@ -1383,21 +1553,12 @@ class DashboardPage(QWidget):
         if not self.engine_worker:
             return
 
-        # 檢查是否已選擇桌號
-        selected_table = self.result_card.current_table()
-        if not selected_table:
-            QMessageBox.warning(self, "無法啟動", "請先選擇一個桌號！")
-            return
-
         # 檢查配置完整性
         if not self._check_config_ready():
             return
 
-        # 禁用桌號選擇器
-        self.result_card.combo.setEnabled(False)
-
-        # 設定選定的桌號到引擎
-        self.engine_worker.set_selected_table(selected_table)
+        # 單桌模式：固定使用 "main" 作為桌號
+        self.engine_worker.set_selected_table("main")
 
         # 啟動模擬模式
         success = self.engine_worker.start_engine(mode="simulation")
@@ -1421,17 +1582,14 @@ class DashboardPage(QWidget):
             # 啟動直接檢測
             self.start_direct_detection()
 
+            # 載入歷史結果到開獎結果卡片
+            self._load_history_results()
+
             self.log_viewer.add_log("INFO", "Dashboard", "🎯 模擬實戰模式已啟動 - 將移動滑鼠但不實際點擊")
 
     def start_real_battle(self):
         """啟動真實實戰模式"""
         if not self.engine_worker:
-            return
-
-        # 檢查是否已選擇桌號
-        selected_table = self.result_card.current_table()
-        if not selected_table:
-            QMessageBox.warning(self, "無法啟動", "請先選擇一個桌號！")
             return
 
         # 檢查配置完整性
@@ -1453,11 +1611,8 @@ class DashboardPage(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        # 禁用桌號選擇器
-        self.result_card.combo.setEnabled(False)
-
-        # 設定選定的桌號到引擎
-        self.engine_worker.set_selected_table(selected_table)
+        # 單桌模式：固定使用 "main" 作為桌號
+        self.engine_worker.set_selected_table("main")
 
         # 啟動實戰模式
         success = self.engine_worker.start_engine(mode="real")
@@ -1480,6 +1635,9 @@ class DashboardPage(QWidget):
 
             # 啟動直接檢測
             self.start_direct_detection()
+
+            # 載入歷史結果到開獎結果卡片
+            self._load_history_results()
 
             self.log_viewer.add_log("WARNING", "Dashboard", "⚡ 實戰模式已啟動 - 將執行真實點擊操作")
 
@@ -1523,9 +1681,6 @@ class DashboardPage(QWidget):
 
         # 更新NextBetCard狀態為等待啟動
         self.next_bet_card.set_engine_running(False)
-
-        # 重新啟用桌號選擇器
-        self.result_card.combo.setEnabled(True)
 
         # 重置按鈕狀態
         self.simulate_btn.setEnabled(True)
@@ -1653,25 +1808,51 @@ class DashboardPage(QWidget):
         latest = status.get("latest_results")
         if not isinstance(latest, dict):
             latest = {}
+
+        # 檢測新結果並添加到歷史
+        if latest and "main" in latest:
+            info = latest.get("main")
+            if info and info.get("winner"):
+                # 檢查是否為新結果（通過 round_id）
+                winner = info.get("winner")
+                timestamp = info.get("received_at", time.time())
+                round_id = info.get("round_id")
+
+                # 檢查該 round_id 是否已存在於歷史中（檢查所有記錄）
+                is_new = True
+                if round_id:
+                    for existing in self.results_history_card.results_history:
+                        if existing.get("round_id") == round_id:
+                            is_new = False
+                            break
+
+                if is_new and round_id:
+                    # 確保 timestamp 是浮點數
+                    if isinstance(timestamp, (int, float)):
+                        ts = float(timestamp)
+                        # 如果是毫秒，轉為秒
+                        if ts > 1e10:
+                            ts = ts / 1000.0
+                    else:
+                        ts = time.time()
+
+                    self.results_history_card.add_result(winner, ts, round_id)
+
         self.latest_results = latest
 
-        tables = sorted(latest.keys())
-        self.result_card.set_stream_status(status.get("t9_stream_status"))
-        self.result_card.set_tables(tables)
+        tables = sorted((t for t in latest.keys() if t), key=self.result_card._table_sort_key)
 
-        current_table = self.result_card.current_table()
-        info = None
-        if current_table and current_table in latest:
-            info = latest[current_table]
-            self.selected_result_table = current_table
-        elif tables:
-            first_table = tables[0]
-            info = latest.get(first_table)
-            self.result_card.select_table(first_table)
-            self.selected_result_table = first_table
+        # 使用圖像檢測狀態
+        detection_enabled = status.get("detection_enabled", False)
+        if detection_enabled:
+            self.result_card.set_stream_status("connected")
+        elif status.get("enabled"):
+            self.result_card.set_stream_status("connecting")
         else:
-            self.selected_result_table = None
+            self.result_card.set_stream_status("stopped")
 
+        # 單桌模式：直接使用 "main" 桌號
+        info = latest.get("main")
         self.result_card.set_result(info)
         summary = status.get("line_summary")
         if not isinstance(summary, dict):
@@ -1682,20 +1863,47 @@ class DashboardPage(QWidget):
         self.update_strategy_status_display(summary)
 
     def on_result_table_selected(self, table_id: str):
-        """使用者切換桌號"""
-        previous = self.selected_result_table
-        self.selected_result_table = table_id or None
+        """單桌模式：不再需要此方法"""
+        pass
 
-        info = self.latest_results.get(table_id) if table_id else None
-        self.result_card.set_result(info)
+    def _load_history_results(self):
+        """從 EngineWorker 載入歷史結果到開獎結果卡片"""
+        if not self.engine_worker:
+            self.log_viewer.add_log("WARNING", "Dashboard", "engine_worker 不存在，無法載入歷史")
+            return
 
-        if previous != self.selected_result_table:
-            if self.selected_result_table:
-                display = TABLE_ID_DISPLAY_MAP.get(self.selected_result_table, self.selected_result_table)
-                display_text = display if display == self.selected_result_table else f"{display}（{self.selected_result_table}）"
-                self._append_table_log("INFO", "Result", self.selected_result_table, f"切換到 {display_text}")
+        try:
+            # 獲取所有歷史結果
+            history = self.engine_worker.get_all_history_results()
+
+            self.log_viewer.add_log("DEBUG", "Dashboard", f"從 SignalTracker 獲取到 {len(history)} 筆歷史記錄")
+
+            if history:
+                # 過濾出 main 桌的結果
+                main_results = [r for r in history if r.get("table_id") == "main"]
+
+                self.log_viewer.add_log("DEBUG", "Dashboard", f"過濾後 main 桌有 {len(main_results)} 筆記錄")
+
+                if main_results:
+                    self.log_viewer.add_log("INFO", "Dashboard", f"📊 載入 {len(main_results)} 筆歷史開獎記錄")
+
+                    # 載入到卡片
+                    for result in main_results:
+                        winner = result.get("winner")
+                        timestamp = result.get("timestamp", time.time())
+                        round_id = result.get("round_id")
+
+                        if winner:
+                            self.results_history_card.add_result(winner, timestamp, round_id)
+                else:
+                    self.log_viewer.add_log("INFO", "Dashboard", "SignalTracker 中沒有 main 桌的歷史記錄")
             else:
-                self._process_incoming_log("INFO", "Result", "已清除桌號篩選")
+                self.log_viewer.add_log("INFO", "Dashboard", "SignalTracker 歷史為空")
+
+        except Exception as e:
+            self.log_viewer.add_log("ERROR", "Dashboard", f"載入歷史結果失敗: {e}")
+            import traceback
+            self.log_viewer.add_log("ERROR", "Dashboard", traceback.format_exc())
 
     def load_positions_data(self):
         """載入 positions 配置數據"""

@@ -10,7 +10,6 @@ from PySide6.QtGui import QAction, QIcon, QFont
 
 from .pages.page_home import HomePage
 from .pages.page_templates import TemplatesPage
-from .pages.page_positions import PositionsPage
 from .pages.page_overlay import OverlayPage
 from .pages.page_chip_profile import ChipProfilePage
 from .pages.page_strategy import StrategyPage
@@ -19,6 +18,7 @@ from .pages.page_dashboard import DashboardPage
 from .pages.page_sessions import SessionsPage
 from .pages.page_settings import SettingsPage
 from .pages.page_live_monitor import LiveMonitorPage
+from .pages.page_result_detection import PageResultDetection
 from .app_state import APP_STATE
 from .components.toast import show_toast
 
@@ -61,8 +61,10 @@ class MainWindow(QMainWindow):
         self.add_page("dashboard", dashboard_page, "實戰主控台")
 
         self.add_page("chip_profile", ChipProfilePage(), "籌碼設定")
-        self.add_page("positions", PositionsPage(), "位置校準")
         self.add_page("strategy", StrategyPage(), "策略設定")
+
+        # ===== 珠盤檢測設定 =====
+        self.add_page("result_detection", PageResultDetection(), "珠盤檢測設定")
 
         # ===== 輔助功能（較少使用，可選） =====
         # self.add_page("templates", TemplatesPage(), "模板管理")  # 隱藏：很少使用

@@ -14,7 +14,15 @@
       "Bash(pip install:*)",
       "Bash(tasklist)",
       "Bash(findstr:*)",
-      "Bash(PYTHONIOENCODING=utf-8 python:*)"
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(curl -N --max-time 10 http://127.0.0.1:8000/api/stream)",
+      "Bash(curl -N -H \"Accept: text/event-stream\" --max-time 10 http://127.0.0.1:8000/api/stream)",
+      "Bash(del \"C:\\Users\\owen9\\OneDrive\\Desktop\\Bagarrat\\BacarratBot-v2\\ui\\workers\\__pycache__\\engine_worker.cpython-311.pyc\")",
+      "Read(//c/Users/owen9/OneDrive/Desktop/Bagarrat/T9-Web-API/**)",
+      "Bash(find . -type d -name \"__pycache__\" -exec rm -rf {} +)",
+      "Bash(ren banker_win.png.png banker_win.png)",
+      "Bash(ren player_win.png.png player_win.png)",
+      "Bash(ren tie_win.png.png tie_win.png)"
     ],
     "deny": [],
     "ask": []

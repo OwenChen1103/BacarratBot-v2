@@ -1,0 +1,80 @@
+{
+  "_comment": "結果檢測系統配置範例",
+  "_usage": "複製此文件並整合到 positions.json 的 result_detection 區段",
+
+  "roi": {
+    "_description": "三個結果顯示區域的位置 (需手動捕獲)",
+    "banker": {
+      "x": 100,
+      "y": 200,
+      "w": 150,
+      "h": 80,
+      "_comment": "莊家勝出顯示區域"
+    },
+    "player": {
+      "x": 300,
+      "y": 200,
+      "w": 150,
+      "h": 80,
+      "_comment": "閒家勝出顯示區域"
+    },
+    "tie": {
+      "x": 500,
+      "y": 200,
+      "w": 150,
+      "h": 80,
+      "_comment": "和局顯示區域"
+    }
+  },
+
+  "template_paths": {
+    "_description": "三種結果的模板圖片路徑",
+    "banker_win": "templates/results/banker_win.png",
+    "player_win": "templates/results/player_win.png",
+    "tie_win": "templates/results/tie_win.png"
+  },
+
+  "detection_config": {
+    "_description": "檢測參數配置",
+
+    "ncc_threshold": 0.70,
+    "_threshold_comment": "NCC 匹配閾值 (0.0-1.0)，建議 0.65-0.80",
+
+    "check_interval_ms": 200,
+    "_interval_comment": "檢測間隔毫秒，建議 150-300ms",
+
+    "consecutive_required": 3,
+    "_consecutive_comment": "連續確認幀數，建議 3-5 幀",
+
+    "cooldown_ms": 5000,
+    "_cooldown_comment": "檢測後冷卻時間毫秒，建議 3000-8000ms"
+  },
+
+  "_troubleshooting": {
+    "檢測不到結果": [
+      "1. 降低 ncc_threshold (例如從 0.70 -> 0.65)",
+      "2. 減少 consecutive_required (從 3 -> 2)",
+      "3. 檢查 ROI 位置是否正確",
+      "4. 重新截取更清晰的模板"
+    ],
+    "誤報率高": [
+      "1. 提高 ncc_threshold (例如從 0.70 -> 0.75)",
+      "2. 增加 consecutive_required (從 3 -> 5)",
+      "3. 延長 cooldown_ms (從 5000 -> 8000)",
+      "4. 確保 ROI 不包含干擾元素"
+    ],
+    "檢測延遲大": [
+      "1. 減少 check_interval_ms (從 200 -> 150)",
+      "2. 減少 consecutive_required (從 3 -> 2)",
+      "3. 檢查 CPU 使用率"
+    ]
+  },
+
+  "_best_practices": [
+    "模板應為結果圖示的清晰特寫 (建議 100x50 像素左右)",
+    "ROI 應緊密包圍圖示，避免包含背景",
+    "三個 ROI 不應重疊",
+    "在不同光線條件下測試",
+    "定期更新模板以適應遊戲 UI 變化"
+  ]
+}

@@ -398,11 +398,35 @@ class LineOrchestrator:
         winner: Optional[str],
         timestamp: float,
     ) -> None:
+        # 🔍 CRITICAL: 記錄 handle_result 被調用
+        self._record_event(
+            "INFO",
+            f"🎯 handle_result 被調用: table={table_id} round={round_id} winner={winner}",
+            {"table": table_id},
+        )
+
         winner_code = winner.upper()[0] if winner else None
 
         for strategy_key, definition in self._strategies_for_table(table_id):
             tracker = self.signal_trackers[strategy_key]
+
+            # 🔍 CRITICAL: 記錄呼叫 tracker.record 之前的狀態
+            history_before = tracker._get_recent_winners(table_id, 10)
+            self._record_event(
+                "DEBUG",
+                f"📝 呼叫 tracker.record 之前: strategy={strategy_key} table={table_id} 歷史長度={len(tracker.history.get(table_id, []))} 近期={history_before}",
+                {"table": table_id},
+            )
+
             tracker.record(table_id, round_id, winner_code or "", timestamp)
+
+            # 🔍 CRITICAL: 記錄呼叫 tracker.record 之後的狀態
+            history_after_record = tracker._get_recent_winners(table_id, 10)
+            self._record_event(
+                "DEBUG",
+                f"✅ tracker.record 完成: strategy={strategy_key} table={table_id} winner_code={winner_code} 歷史長度={len(tracker.history.get(table_id, []))} 近期={history_after_record}",
+                {"table": table_id},
+            )
 
             # 記錄關鍵事件：開獎結果和歷史記錄
             history_after = tracker._get_recent_winners(table_id, 10)

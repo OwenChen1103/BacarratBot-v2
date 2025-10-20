@@ -1,0 +1,55 @@
+{
+  "bead_plate_roi": {
+    "x": 208,
+    "y": 735,
+    "w": 396,
+    "h": 198
+  },
+  "detection_config": {
+    "check_interval_ms": 200,
+    "consecutive_required": 3,
+    "cooldown_ms": 5000,
+    "diff_threshold": 30,
+    "min_change_area": 100,
+    "max_change_area": 2000,
+    "banker_hsv_range": [
+      [
+        0,
+        50,
+        50
+      ],
+      [
+        10,
+        255,
+        255
+      ]
+    ],
+    "player_hsv_range": [
+      [
+        100,
+        50,
+        50
+      ],
+      [
+        130,
+        255,
+        255
+      ]
+    ],
+    "tie_hsv_range": [
+      [
+        35,
+        50,
+        50
+      ],
+      [
+        85,
+        255,
+        255
+      ]
+    ],
+    "blackout_threshold": 15,
+    "whitewash_threshold": 240,
+    "abnormal_pixel_ratio": 0.9
+  }
+}

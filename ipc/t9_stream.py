@@ -27,19 +27,37 @@ class T9StreamClient:
         on_status: Optional[Callable[[str, Optional[str]], None]] = None,
         session: Optional[requests.Session] = None,
         request_timeout: float = 60.0,
+        connection_refresh_interval: float = 60.0,  # 每60秒主動重連
     ) -> None:
         self.base_url = base_url
         self.event_types = event_types
         self.headers = headers or {"Accept": "text/event-stream"}
         self.retry_delay = max(1.0, retry_delay)
         self.request_timeout = max(5.0, request_timeout)
+        self.connection_refresh_interval = connection_refresh_interval
         self.on_event = on_event
         self.on_status = on_status
 
-        self._session = session or requests.Session()
+        # 創建 session 並配置連接池
+        if session:
+            self._session = session
+        else:
+            self._session = requests.Session()
+            # 配置連接池和 keep-alive
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=1,
+                pool_maxsize=1,
+                max_retries=0,
+                pool_block=False
+            )
+            self._session.mount('http://', adapter)
+            self._session.mount('https://', adapter)
+
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._current_response: Optional[requests.Response] = None
+        self._response_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     def start(self) -> None:
@@ -73,6 +91,9 @@ class T9StreamClient:
             params["event_types"] = self.event_types
 
         while not self._stop.is_set():
+            connection_start_time = time.time()
+            watchdog_thread = None
+
             try:
                 self._emit_status("connecting", self.base_url)
 
@@ -84,6 +105,9 @@ class T9StreamClient:
                     timeout=(5.0, self.request_timeout),
                 )
 
+                with self._response_lock:
+                    self._current_response = response
+
                 if response.status_code != requests.codes.ok:
                     detail = f"HTTP {response.status_code}"
                     logger.warning("T9 stream HTTP error: %s", detail)
@@ -93,7 +117,19 @@ class T9StreamClient:
                     continue
 
                 self._emit_status("connected", None)
-                logger.info("T9 stream connected: %s", response.url)
+                logger.info("T9 stream connected: %s (will refresh in %.1fs)",
+                           response.url, self.connection_refresh_interval)
+
+                # 啟動看門狗線程，在 refresh_interval 後強制關閉連接
+                watchdog_stop = threading.Event()
+                watchdog_thread = threading.Thread(
+                    target=self._watchdog,
+                    args=(response, connection_start_time, watchdog_stop),
+                    daemon=True
+                )
+                watchdog_thread.start()
+
+                event_count = 0
 
                 for payload in self._iter_sse(response):
                     if payload is None:
@@ -101,35 +137,68 @@ class T9StreamClient:
                     event_name, data = payload
                     if not data:
                         continue
+                    event_count += 1
+
                     if self.on_event:
                         try:
                             self.on_event(event_name, data)
                         except Exception:
                             logger.exception("T9 stream on_event callback failed")
 
+                # 停止看門狗
+                if watchdog_thread:
+                    watchdog_stop.set()
+
+                logger.info(f"T9 stream iteration ended after {event_count} events")
                 response.close()
 
+                with self._response_lock:
+                    self._current_response = None
+
             except requests.RequestException as exc:
+                if watchdog_thread:
+                    watchdog_stop.set()
                 if self._stop.is_set():
                     break
                 logger.warning("T9 stream connection error: %s", exc)
                 self._emit_status("error", str(exc))
                 self._wait_before_retry()
             except Exception as exc:
+                if watchdog_thread:
+                    watchdog_stop.set()
                 if self._stop.is_set():
                     break
                 logger.exception("Unexpected T9 stream error: %s", exc)
                 self._emit_status("error", str(exc))
                 self._wait_before_retry()
             else:
-                # Normal exit (e.g., server closed). If stop not set, retry.
-                self._emit_status("disconnected", None)
+                # Normal exit (e.g., server closed or refresh timeout). If stop not set, retry immediately.
+                self._emit_status("reconnecting", None)
                 if not self._stop.is_set():
-                    logger.info("T9 stream disconnected, retrying in %.1fs", self.retry_delay)
-                    self._wait_before_retry()
+                    logger.info("T9 stream reconnecting...")
+                    # 不等待直接重連
+                    continue
 
         self._emit_status("stopped", None)
         logger.info("T9 stream client stopped")
+
+    # ------------------------------------------------------------------
+    def _watchdog(self, response: requests.Response, start_time: float, stop_event: threading.Event) -> None:
+        """監控連接時間，超時後強制關閉響應以觸發重連"""
+        while not stop_event.is_set() and not self._stop.is_set():
+            elapsed = time.time() - start_time
+            remaining = self.connection_refresh_interval - elapsed
+
+            if remaining <= 0:
+                logger.info(f"T9 stream watchdog: Force closing connection after {elapsed:.1f}s")
+                try:
+                    response.close()
+                except Exception as e:
+                    logger.debug(f"T9 stream watchdog: Error closing response: {e}")
+                break
+
+            # 每秒檢查一次
+            stop_event.wait(min(1.0, remaining))
 
     # ------------------------------------------------------------------
     def _iter_sse(self, response: requests.Response):
@@ -137,8 +206,11 @@ class T9StreamClient:
         event_id: Optional[str] = None
         data_lines = []
 
+        line_count = 0
         for raw_line in response.iter_lines(decode_unicode=True):
+            line_count += 1
             if self._stop.is_set():
+                logger.info(f"T9 stream _iter_sse stopped by flag after {line_count} lines")
                 break
             if raw_line is None:
                 continue
@@ -177,6 +249,7 @@ class T9StreamClient:
                 event_id = line[3:].strip() or None
 
         # Signal termination with heartbeat to allow reconnect logic
+        logger.info(f"T9 stream _iter_sse exited naturally after {line_count} lines")
         return
 
     # ------------------------------------------------------------------

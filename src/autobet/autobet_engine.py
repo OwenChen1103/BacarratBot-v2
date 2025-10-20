@@ -256,93 +256,23 @@ class AutoBetEngine:
 
         return plan
 
-    def _prepare_betting_plan(self) -> bool:
-        """準備下注計畫並檢查風控"""
-        try:
-            logger.info("開始準備下注計畫...")
-
-            # 檢查是否有自定義點擊順序
-            click_sequence = self.pos.get("click_sequence", [])
-            if click_sequence:
-                logger.info(f"發現自定義點擊順序: {click_sequence}")
-                self.current_plan = click_sequence  # 直接使用點擊順序
-                return True
-
-            # 使用策略生成計畫
-            unit = int(self.strategy.get("unit", 1000))
-            targets = self.strategy.get("targets", ["banker"])
-            split = self.strategy.get("split_units", {"banker": 1})
-            targets_units = {t: int(split.get(t, 1)) for t in targets}
-
-            logger.info(f"策略配置: unit={unit}, targets={targets}, split_units={split}")
-
-            # 優先使用 SmartChipPlanner
-            if self.smart_planner:
-                logger.info("使用 SmartChipPlanner 生成計畫")
-                plan = self._build_plan_with_smart_planner(unit, targets_units)
-            else:
-                logger.warning("SmartChipPlanner 未初始化，使用舊系統")
-                plan = build_click_plan(unit, targets_units)
-
-            plan_repr = json.dumps(plan, ensure_ascii=False)
-            round_id = f"NOID-{int(time.time())}"
-
-            # 風控檢查
-            per_round_amount = unit * sum(targets_units.values())
-            ok, reason = check_limits(self.strategy.get("limits", {}), per_round_amount, self.net)
-            if not ok:
-                logger.warning(f"Risk blocked: {reason}")
-                self.state = "paused"
-                return False
-
-            # 冪等檢查
-            if not self.guard.accept(round_id, plan_repr):
-                logger.info("Idempotent reject (same plan in same round)")
-                self.state = "waiting_round"
-                return False
-
-            self.current_plan = plan
-            logger.info(f"下注計畫準備完成: {plan}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Prepare betting plan failed: {e}", exc_info=True)
-            return False
-
-    def _execute_betting_plan(self):
-        """執行下注計畫"""
-        if not self.current_plan:
-            logger.warning("沒有下注計畫可執行")
-            return
-
-        # 防止併發執行檢查
-        if not self._exec_lock.acquire(blocking=False):
-            logger.info("_execute_betting_plan: 已有執行中，跳過重複執行")
-            return
-
-        try:
-            logger.info(f"開始執行下注計畫: {self.current_plan}")
-
-            # 檢查是否是點擊順序（字串列表）
-            if isinstance(self.current_plan, list) and len(self.current_plan) > 0 and isinstance(self.current_plan[0], str):
-                logger.info("使用自定義點擊順序執行")
-                self._execute_click_sequence(self.current_plan)
-            else:
-                logger.info(f"使用策略計畫執行: {len(self.current_plan)} 個動作")
-                for kind, val in self.current_plan:
-                    if kind == "chip":
-                        self.act.click_chip_value(int(val))
-                    elif kind == "bet":
-                        self.act.click_bet(val)
-                    # 在模擬模式下添加短間隔
-                    if self.dry:
-                        time.sleep(self.dry_step_delay_ms / 1000.0)
-        finally:
-            self._exec_lock.release()
+    # ============================================================
+    # 🗑️ 舊版策略系統已廢棄
+    # 所有自動投注邏輯現由 LineOrchestrator 處理
+    # 以下方法已移除：_prepare_betting_plan, _execute_betting_plan
+    # 保留 trigger_if_open() 僅供手動測試點擊順序使用
+    # ============================================================
 
     def trigger_if_open(self) -> bool:
-        """在檢測到可下注時立即嘗試執行一次（由外部偵測器提示）。
-        回傳是否成功觸發執行。"""
+        """手動觸發執行點擊順序（僅用於測試）
+
+        注意：這個方法不再用於自動投注策略，僅保留用於：
+        1. Dashboard 手動測試點擊順序
+        2. 驗證點擊配置是否正確
+
+        所有實際下注決策由 LineOrchestrator 處理。
+        回傳是否成功觸發執行。
+        """
         try:
             # 防止併發執行檢查
             if not self._exec_lock.acquire(blocking=False):
@@ -510,16 +440,17 @@ class AutoBetEngine:
             self.state = "error"
 
     def _apply_result_and_staking(self, evt: Dict):
-        """應用結果並更新馬丁格爾等遞增邏輯"""
-        try:
-            # MVP: 簡單的勝負統計，暫不計算實際賠率
-            # 後續可根據策略和賠率計算實際損益
+        """處理結果後重置狀態（舊版策略邏輯已廢棄）
 
+        注意：Martingale 和盈虧計算現由 LineOrchestrator 處理
+        這裡只做基本的狀態重置
+        """
+        try:
             # 重置結果標記
             self.session_ctx["last_result_ready"] = False
             self.current_plan = None
 
-            logger.debug(f"Applied result for round {self.rounds}")
+            logger.debug(f"Applied result for round {self.rounds} (盈虧計算由 LineOrchestrator 處理)")
 
         except Exception as e:
             logger.error(f"Apply result failed: {e}", exc_info=True)

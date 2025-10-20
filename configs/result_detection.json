@@ -1,0 +1,34 @@
+{
+  "roi": {
+    "banker": {
+      "x": 877,
+      "y": 469,
+      "w": 167,
+      "h": 58
+    },
+    "player": {
+      "x": 877,
+      "y": 469,
+      "w": 167,
+      "h": 58
+    },
+    "tie": {
+      "x": 877,
+      "y": 469,
+      "w": 167,
+      "h": 58
+    }
+  },
+  "template_paths": {
+    "banker_win": "C:\\Users\\owen9\\OneDrive\\Desktop\\Bagarrat\\BacarratBot-v2\\templates\\results\\banker_win.png",
+    "player_win": "C:\\Users\\owen9\\OneDrive\\Desktop\\Bagarrat\\BacarratBot-v2\\templates\\results\\player_win.png",
+    "tie_win": "C:\\Users\\owen9\\OneDrive\\Desktop\\Bagarrat\\BacarratBot-v2\\templates\\results\\tie_win.png"
+  },
+  "detection_config": {
+    "ncc_threshold": 0.65,
+    "check_interval_ms": 200,
+    "consecutive_required": 3,
+    "cooldown_ms": 5000
+  },
+  "_comment": "注意：目前三個 ROI 設定為相同位置（單桌模式），Phase 3 完成後可以使用 UI 工具分別設定三個區域"
+}

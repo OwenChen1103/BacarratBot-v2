@@ -2,11 +2,13 @@
 import os, json, time, threading, random, logging, queue, unicodedata
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any, Tuple, List
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, QTimer
+import cv2
+import numpy as np
 
 from src.autobet.autobet_engine import AutoBetEngine
 from src.autobet.chip_profile_manager import ChipProfileManager
-from ipc.t9_stream import T9StreamClient
+from src.autobet.detectors import BeadPlateResultDetector
 from src.autobet.lines import (
     LineOrchestrator,
     TablePhase,
@@ -14,6 +16,7 @@ from src.autobet.lines import (
     load_strategy_definitions,
 )
 
+# 桌號映射: canonical_id -> display_name (僅供 UI 顯示)
 TABLE_DISPLAY_MAP = {
     "WG7": "BG_131",
     "WG8": "BG_132",
@@ -22,7 +25,12 @@ TABLE_DISPLAY_MAP = {
     "WG11": "BG_136",
     "WG12": "BG_137",
     "WG13": "BG_138",
+    "WG14": "BG_139",
+    "WG15": "BG_140",
 }
+
+# 反向映射: display_name -> canonical_id (用於標準化)
+DISPLAY_TO_CANONICAL_MAP = {v: k for k, v in TABLE_DISPLAY_MAP.items()}
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +135,12 @@ class EngineWorker(QThread):
         self._net_profit = 0
         self._last_winner = None
         self._incoming_events: "queue.Queue[Dict]" = queue.Queue()
-        self._t9_client: Optional[T9StreamClient] = None
-        self._t9_status = "stopped"
-        self._t9_enabled = os.getenv("T9_STREAM_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
+        # BeadPlateResultDetector 相關狀態
+        self._result_detector: Optional[BeadPlateResultDetector] = None
+        self._detection_timer: Optional[QTimer] = None
+        self._detection_enabled = False
+
         self._latest_results: Dict[str, Dict[str, Any]] = {}
         self._line_orchestrator: Optional[LineOrchestrator] = None
         self._line_order_queue: "queue.Queue[BetDecision]" = queue.Queue()
@@ -139,7 +150,6 @@ class EngineWorker(QThread):
         base_dir.mkdir(parents=True, exist_ok=True)
         self._line_state_path = base_dir / "line_state.json"
         self._line_orders_path = base_dir / "line_orders.ndjson"
-        # 移除檢測相關狀態，檢測邏輯由 Dashboard 處理
 
         # ChipProfile 管理器
         self._chip_profile_manager = ChipProfileManager()
@@ -173,8 +183,8 @@ class EngineWorker(QThread):
             self._tick_running = True
             self._init_line_orchestrator()
 
-            # 不在初始化時啟動T9連線，等到start_engine()時才啟動
-            # self._setup_result_stream()  # 移到 start_engine()
+            # 初始化 ResultDetector（但不啟動檢測）
+            self._setup_result_detector()
 
             # 發送初始狀態
             self.state_changed.emit("idle")
@@ -221,7 +231,7 @@ class EngineWorker(QThread):
                 # 檢測邏輯已移至 Dashboard，EngineWorker 只負責引擎狀態管理
                 # 不再在此處執行檢測，避免與 Dashboard 重複檢測
 
-                # 發送引擎狀態（移除檢測相關狀態）
+                # 發送引擎狀態
                 status = {
                     "current_state": current_state,
                     "enabled": self._enabled,
@@ -229,7 +239,7 @@ class EngineWorker(QThread):
                     "rounds": getattr(self, '_round_count', 0),
                     "net": getattr(self, '_net_profit', 0),
                     "last_winner": getattr(self, '_last_winner', None),
-                    "t9_stream_status": getattr(self, '_t9_status', None),
+                    "detection_enabled": self._detection_enabled,
                     "latest_results": self._latest_results_snapshot(),
                     "line_summary": self._line_summary,
                 }
@@ -241,6 +251,32 @@ class EngineWorker(QThread):
             # 固定頻率，簡化邏輯
             self.msleep(1000)  # 1秒，只需定期發送狀態更新
 
+    def get_all_history_results(self) -> list:
+        """獲取所有歷史開獎結果（從 SignalTracker）"""
+        results = []
+        if not self._line_orchestrator:
+            return results
+
+        try:
+            # 從所有 SignalTracker 收集歷史
+            for strategy_key, tracker in self._line_orchestrator.signal_trackers.items():
+                for table_id, history_deque in tracker.history.items():
+                    for winner, timestamp in history_deque:
+                        results.append({
+                            "winner": winner,
+                            "timestamp": timestamp,
+                            "round_id": f"{table_id}-{int(timestamp)}",
+                            "table_id": table_id
+                        })
+
+            # 按時間排序
+            results.sort(key=lambda x: x["timestamp"])
+
+        except Exception as e:
+            self._emit_log("ERROR", "Engine", f"獲取歷史結果失敗: {e}")
+
+        return results
+
     def start_engine(self, mode: str = "simulation", **kwargs) -> bool:
         """啟動引擎
         Args:
@@ -251,11 +287,6 @@ class EngineWorker(QThread):
             return False
 
         try:
-            # 啟動T9結果流（引擎啟動時才連線）
-            if not self._t9_client:
-                self._setup_result_stream()
-                self._emit_log("INFO", "Engine", "✅ T9結果流已啟動")
-
             # 檢查是否需要重新載入配置（如果已經載入過就跳過）
             if not hasattr(self.engine, 'overlay') or not self.engine.overlay:
                 if not self._load_real_configs():
@@ -275,6 +306,13 @@ class EngineWorker(QThread):
                     pass
 
             self._enabled = True
+
+            # 啟動結果檢測
+            if self._result_detector:
+                self._start_result_detection()
+                self._emit_log("INFO", "Engine", "✅ 結果檢測已啟動")
+            else:
+                self._emit_log("WARNING", "Engine", "⚠️ ResultDetector 未初始化")
 
             mode_text = "模擬" if self._is_simulation else "實戰"
             self._emit_log("INFO", "Engine", f"{mode_text}模式已啟動 - 開始檢測遊戲畫面")
@@ -339,7 +377,12 @@ class EngineWorker(QThread):
 
     def stop_engine(self):
         self._enabled = False
-        # 檢測狀態由 Dashboard 管理，此處不再重置
+        # 停止結果檢測
+        if self._detection_timer:
+            self._detection_timer.stop()
+            self._detection_enabled = False
+            self._emit_log("INFO", "Engine", "結果檢測已停止")
+
         if self.engine:
             try:
                 self.engine.set_enabled(False)
@@ -351,12 +394,7 @@ class EngineWorker(QThread):
             except Exception:
                 pass
             self.event_feeder = None
-        if self._t9_client:
-            try:
-                self._t9_client.stop()
-            except Exception:
-                pass
-            self._t9_client = None
+
         self._emit_log("INFO", "Engine", "引擎已停止")
 
         # 立即發送狀態更新
@@ -383,12 +421,25 @@ class EngineWorker(QThread):
             table_id = event.get("table_id")
             round_id = event.get("round_id")
 
+            # 調試：記錄每個事件的類型
+            self._emit_log(
+                "DEBUG",
+                "Engine",
+                f"_handle_event 收到事件: type={event_type}, table={table_id}, round={round_id}, winner={winner}"
+            )
+
             if event_type == "RESULT":
                 # 只處理選定桌號的事件（使用 mapping）
                 if not self._is_selected_table(table_id):
                     return  # 靜默忽略非選定桌號
 
                 self._emit_log("DEBUG", "Engine", f"🎲 處理 RESULT: table={table_id} round={round_id} winner={winner}")
+
+                # 🔍 診斷：檢查 Line orchestrator 條件
+                has_orchestrator = self._line_orchestrator is not None
+                has_table = table_id is not None
+                has_round = round_id is not None
+                self._emit_log("INFO", "Engine", f"🔍 Line 條件檢查: orchestrator={has_orchestrator}, table={has_table} ({table_id}), round={has_round} ({round_id}), winner={winner}")
 
                 if self._line_orchestrator and table_id and round_id:
                     ts_raw = event.get("received_at")
@@ -403,7 +454,7 @@ class EngineWorker(QThread):
                     self._save_line_state()
                     self._flush_line_events()
 
-                    # WORKAROUND: T9 可能不會發送 betting 階段事件
+                    # WORKAROUND: 某些階段事件可能不會發送
                     # 在 RESULT 後立即觸發 BETTABLE 階段檢查，模擬下一局開始下注
                     # 這樣可以讓 LineOrchestrator 檢查是否滿足策略條件
                     next_round_id = f"{round_id}_next"  # 模擬下一局的 round_id
@@ -416,6 +467,8 @@ class EngineWorker(QThread):
                     self._line_summary = self._line_orchestrator.snapshot()
                     self._save_line_state()
                     self._flush_line_events()
+                else:
+                    self._emit_log("WARNING", "Engine", f"⚠️ 跳過 Line 處理: orchestrator={has_orchestrator}, table={has_table}, round={has_round}")
 
                 self._round_count += 1
                 self._last_winner = winner
@@ -435,7 +488,11 @@ class EngineWorker(QThread):
                     details.append(f"round={round_id}")
                 details_str = f" ({', '.join(details)})" if details else ""
                 message = f"結果：{result_text}{details_str}"
+
+                # 調試：在發送 Events 日誌前後加標記
+                self._emit_log("DEBUG", "Engine", f"📤 準備發送 Events 日誌: table={table_id} round={round_id} winner={winner}")
                 self._emit_table_log("INFO", table_id, message, module="Events")
+                self._emit_log("DEBUG", "Engine", f"✅ Events 日誌已發送")
 
                 # 如果有真正的引擎，也發送給它
                 if self.engine:
@@ -445,21 +502,28 @@ class EngineWorker(QThread):
                         self._emit_log("WARNING", "Engine", f"引擎處理事件錯誤: {e}")
 
         except Exception as e:
+            import traceback
             self._emit_log("ERROR", "Events", f"事件處理錯誤: {e}")
+            self._emit_log("ERROR", "Events", f"堆棧追蹤: {traceback.format_exc()}")
 
 
 
     def _store_latest_result(self, event: Dict[str, Any]) -> None:
+        """儲存最新結果（內部統一使用 canonical ID）"""
         table_id = event.get("table_id")
         if not table_id:
             return
 
-        table_key = str(table_id)
+        # 使用 canonical ID 作為唯一 key
+        canonical_id = self._normalize_table_id(table_id)
+        if not canonical_id:
+            return
         round_id = event.get("round_id")
         round_str = str(round_id) if round_id is not None else None
 
         info: Dict[str, Any] = {
-            "table_id": table_key,
+            "table_id": canonical_id,  # 統一使用 canonical ID
+            "display_table_id": self._map_table_display(canonical_id),
             "round_id": round_str,
             "winner": event.get("winner"),
             "received_at": event.get("received_at") or int(time.time() * 1000),
@@ -477,20 +541,15 @@ class EngineWorker(QThread):
             if raw.get("win_lose_result"):
                 info["win_lose_result"] = raw.get("win_lose_result")
 
-        # 將最新資料移到字典尾端維持近序
-        self._latest_results.pop(table_key, None)
-        self._latest_results[table_key] = info
+        # 將最新資料移到字典尾端維持近序（只用 canonical ID）
+        self._latest_results.pop(canonical_id, None)
+        self._latest_results[canonical_id] = info
 
-        # 如果有 mapping，也用 mapped 的 key 儲存一份
-        mapped_key = TABLE_DISPLAY_MAP.get(table_key)
-        if mapped_key:
-            self._latest_results.pop(mapped_key, None)
-            self._latest_results[mapped_key] = info.copy()
-
+        # 限制最多保留 20 個桌號
         max_tables = 20
         while len(self._latest_results) > max_tables:
             first_key = next(iter(self._latest_results))
-            if first_key == table_key and len(self._latest_results) == 1:
+            if first_key == canonical_id and len(self._latest_results) == 1:
                 break
             self._latest_results.pop(first_key, None)
 
@@ -507,51 +566,82 @@ class EngineWorker(QThread):
             "rounds": getattr(self, '_round_count', 0),
             "net": getattr(self, '_net_profit', 0),
             "last_winner": getattr(self, '_last_winner', None),
-            "detection_state": self._detection_state,
-            "detection_error": getattr(self, '_last_detection_error', None),
-            "t9_stream_status": getattr(self, '_t9_status', None),
+            "detection_enabled": self._detection_enabled,
             "latest_results": self._latest_results_snapshot(),
         }
         self.engine_status.emit(status)
 
     def _emit_log(self, level: str, module: str, msg: str):
+        # 調試：對 Result 和 Events 模組的日誌加上堆棧追蹤
+        if module in ["Result", "Events"] and "結果：" in msg:
+            import traceback
+            stack_lines = traceback.format_stack()
+            # 取最後5層調用，跳過當前函數
+            relevant_stack = stack_lines[-6:-1]
+            caller_summary = " -> ".join([
+                line.split(",")[0].split('"')[-2].split("/")[-1].split("\\")[-1] + ":" + line.split(",")[1].strip().split()[1]
+                for line in relevant_stack if "File" in line
+            ])
+            self.log_message.emit("DEBUG", "StackFull", f"📞 {module} 完整調用鏈: {caller_summary}")
+
         self.log_message.emit(level, module, msg)
 
     # _trigger_engine_execution 方法已移除
     # 觸發邏輯現在由 Dashboard 直接處理
 
     # ------------------------------------------------------------------
+    def _normalize_table_id(self, table_id: Optional[str]) -> Optional[str]:
+        """將桌號標準化為 canonical ID
+
+        Args:
+            table_id: 可能是 display name (BG_131) 或 canonical ID (WG7)
+
+        Returns:
+            canonical ID (標準化的桌號)
+        """
+        if table_id is None:
+            return None
+
+        table_id_str = str(table_id).strip()
+        if not table_id_str:
+            return None
+
+        # 如果是 display name (BG_131-140)，轉換為 canonical ID
+        canonical = DISPLAY_TO_CANONICAL_MAP.get(table_id_str)
+        if canonical:
+            return canonical
+
+        # 已經是 canonical ID (BG125-130, WG7-15) 或未知格式，直接返回
+        return table_id_str
+
     def _map_table_display(self, table_id: Optional[str]) -> Optional[str]:
+        """將 canonical ID 映射為 display name（僅供 UI 顯示）"""
         if not table_id:
             return None
-        return TABLE_DISPLAY_MAP.get(str(table_id), None)
+        table_str = str(table_id).strip()
+        if not table_str:
+            return None
+        return TABLE_DISPLAY_MAP.get(table_str, table_str)
 
     def _is_selected_table(self, table_id: Optional[str]) -> bool:
-        """檢查桌號是否為選定桌號（考慮 mapping）"""
+        """檢查桌號是否為選定桌號（內部統一使用 canonical ID）
+
+        注意：
+        - _selected_table 已在 set_selected_table() 中標準化為 canonical ID
+        - table_id 是事件中的桌號（已是 canonical ID）
+        - 因此只需直接比對即可
+        """
         if not self._selected_table:
-            return True
+            return True  # 未選擇桌號時，接受所有事件
 
         if not table_id:
             return False
 
-        table_id_str = str(table_id)
-        selected = str(self._selected_table)
-
-        # 直接匹配
-        if table_id_str == selected:
-            return True
-
-        # T9發 WG7，用戶選 BG_131
-        mapped = TABLE_DISPLAY_MAP.get(table_id_str)
-        if mapped and mapped == selected:
-            return True
-
-        # 用戶選 BG_131，T9發 WG7
-        for src, dst in TABLE_DISPLAY_MAP.items():
-            if src == table_id_str and dst == selected:
-                return True
-
-        return False
+        # 直接比對 canonical ID
+        normalized = self._normalize_table_id(table_id)
+        if not normalized:
+            return False
+        return str(normalized).strip() == str(self._selected_table).strip()
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -574,143 +664,34 @@ class EngineWorker(QThread):
     # ------------------------------------------------------------------
     def _emit_table_log(self, level: str, table_id: Optional[str], message: str, module: str = "Result") -> None:
         # 只處理選定桌號的日誌（使用 mapping）
-        if not self._is_selected_table(table_id):
-            return  # 靜默忽略非選定桌號的日誌
+        canonical_id = self._normalize_table_id(table_id) if table_id else None
+        if not self._is_selected_table(canonical_id):
+            return
 
         # 過濾不必要的狀態訊息（停止下注、投注中等）
-        skip_messages = ["狀態：停止下注", "狀態：投注中", "狀態：派彩中", "狀態：局已結束", "狀態：開獎中"]
+        skip_messages = ["狀態：停止下注", "狀態：投注中", "狀態：派彩中", "狀態：局已結束", "狀態：开奖中"]
         if any(skip in message for skip in skip_messages):
             return
 
+        # 調試：記錄堆棧追蹤（僅針對 Result 和 Events 模組）
+        if module in ["Result", "Events"] and "結果：" in message:
+            import traceback
+            stack = traceback.format_stack()
+            # 只取最後3層調用
+            caller_info = " <- ".join([
+                line.strip().split("\n")[0].replace("  File ", "")
+                for line in stack[-4:-1]
+            ])
+            self._emit_log("DEBUG", "Stack", f"📞 {module} 日誌調用路徑: {caller_info}")
+
         prefix = ""
-        if table_id:
-            table_id_str = str(table_id)
-            display = self._map_table_display(table_id_str)
-            prefix_parts = [f"[table={table_id_str}]"]
-            if display and display != table_id_str:
+        if canonical_id:
+            display = self._map_table_display(canonical_id)
+            prefix_parts = [f"[table={canonical_id}]"]
+            if display and display != canonical_id:
                 prefix_parts.append(f"[display={display}]")
             prefix = "".join(prefix_parts) + " "
         self._emit_log(level, module, f"{prefix}{message}")
-
-    # ------------------------------------------------------------------
-    def _classify_t9_state(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        table_id = record.get("table_id") or record.get("tableId") or record.get("table")
-        table_id = str(table_id) if table_id is not None else None
-
-        round_raw = record.get("round_id") or record.get("roundId") or record.get("merchant_round_id")
-        round_id = str(round_raw) if round_raw is not None else None
-
-        winner, reason = self._extract_t9_winner(record)
-        game_result_raw = record.get("gameResult")
-        game_result = game_result_raw if isinstance(game_result_raw, dict) else {}
-        player_point = game_result.get("player_point")
-        banker_point = game_result.get("banker_point")
-
-        status_candidates = [
-            record.get("game_payment_status_name"),
-            record.get("game_status"),
-            record.get("status"),
-            record.get("state"),
-            record.get("settle_status"),
-            game_result.get("win_lose_result") if isinstance(game_result, dict) else None,
-            record.get("win_lose_result"),
-            record.get("message"),
-        ]
-        status_text = ""
-        for candidate in status_candidates:
-            text = self._normalize_text(candidate)
-            if text:
-                status_text = text
-                break
-
-        summary = ""
-        stage = "unknown"
-        level = "INFO"
-
-        if winner:
-            stage = "result"
-            text_map = {"B": "莊勝", "P": "閒勝", "T": "和局"}
-            summary = f"結果：{text_map.get(winner, winner)}"
-        elif reason == "cancelled":
-            stage = "cancelled"
-            summary = "結果：取消/無效"
-            level = "WARNING"
-        else:
-            lowered = status_text.lower()
-
-            def _match(keywords):
-                return any(kw in lowered for kw in keywords)
-
-            if lowered:
-                if _match(["投注", "下注", "bet", "wager"]):
-                    stage = "betting"
-                    summary = "狀態：投注中"
-                elif _match(["停止", "關閉", "封盤", "封牌", "stop", "close"]):
-                    stage = "closing"
-                    summary = "狀態：停止下注"
-                elif _match(["開獎", "開牌", "進行", "running", "progress", "deal", "發牌"]):
-                    stage = "dealing"
-                    summary = "狀態：開獎中"
-                elif _match(["派彩", "結算", "settle", "payout"]):
-                    stage = "payout"
-                    summary = "狀態：派彩中"
-                elif _match(["完成", "結束", "finish", "done"]):
-                    stage = "finished"
-                    summary = "狀態：局已結束"
-
-            if not summary:
-                if status_text:
-                    summary = f"狀態：{status_text}"
-                else:
-                    summary = "狀態：未知"
-
-        return {
-            "table_id": table_id,
-            "round_id": round_id,
-            "winner": winner,
-            "reason": reason,
-            "status_text": status_text,
-            "stage": stage,
-            "summary": summary,
-            "level": level,
-            "player_point": player_point,
-            "banker_point": banker_point,
-            "raw_record": record,
-        }
-
-    # ------------------------------------------------------------------
-    def _format_t9_log_message(self, info: Dict[str, Any]) -> str:
-        summary = info.get("summary") or "狀態：未知"
-        round_id = info.get("round_id")
-        status_text = info.get("status_text")
-        reason = info.get("reason")
-        winner = info.get("winner")
-        details = []
-
-        if round_id:
-            details.append(f"round={round_id}")
-
-        if winner:
-            player_point = self._normalize_text(info.get("player_point"))
-            banker_point = self._normalize_text(info.get("banker_point"))
-            if player_point or banker_point:
-                points = []
-                if player_point:
-                    points.append(f"閒 {player_point}")
-                if banker_point:
-                    points.append(f"莊 {banker_point}")
-                if points:
-                    details.append(" / ".join(points))
-
-        if status_text and summary != f"狀態：{status_text}" and summary != f"結果：{status_text}":
-            details.append(f"狀態={status_text}")
-
-        if reason and not winner and reason != "cancelled":
-            details.append(f"原因={reason}")
-
-        if details:
-            return f"{summary} ({', '.join(details)})"
-        return summary
 
     def force_test_sequence(self):
         """強制測試點擊順序"""
@@ -745,9 +726,17 @@ class EngineWorker(QThread):
         threading.Thread(target=_run, name="TriggerClickSequence", daemon=True).start()
 
     def set_selected_table(self, table_id: str):
-        """設定選定的桌號"""
-        self._selected_table = table_id
-        self._emit_log("INFO", "Strategy", f"🎯 開始追蹤桌號: {table_id}")
+        """設定選定的桌號（內部統一使用 canonical ID）"""
+        # 標準化為 canonical ID (T9 原始桌號)
+        canonical_id = self._normalize_table_id(table_id)
+        self._selected_table = canonical_id
+
+        # 顯示友善的日誌訊息
+        if canonical_id != table_id:
+            display_name = TABLE_DISPLAY_MAP.get(canonical_id, canonical_id)
+            self._emit_log("INFO", "Strategy", f"🎯 開始追蹤桌號: {display_name} ({canonical_id})")
+        else:
+            self._emit_log("INFO", "Strategy", f"🎯 開始追蹤桌號: {canonical_id}")
 
     def quit(self):
         self._tick_running = False
@@ -820,54 +809,204 @@ class EngineWorker(QThread):
         except Exception as exc:
             self._emit_log("ERROR", "Line", f"寫入 Line 狀態失敗: {exc}")
 
-    def _setup_result_stream(self) -> None:
-        if not self._t9_enabled:
-            self._emit_log("INFO", "Result", "T9 結果流已停用 (T9_STREAM_ENABLED=false)")
+    # ------------------------------------------------------------------
+    # ResultDetector 相關方法
+    # ------------------------------------------------------------------
+
+    def _setup_result_detector(self) -> None:
+        """初始化 BeadPlateResultDetector (珠盤檢測器)"""
+        try:
+            # 從配置檔載入設定
+            config_path = Path("configs/bead_plate_detection.json")
+            if not config_path.exists():
+                self._emit_log("WARNING", "BeadPlate", "未找到 bead_plate_detection.json，使用預設配置")
+                config = {}
+            else:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    full_config = json.load(f)
+                    config = full_config.get("detection_config", {})
+
+            # 建立 BeadPlateResultDetector
+            self._result_detector = BeadPlateResultDetector(config)
+
+            # 載入 ROI
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    full_config = json.load(f)
+
+                # 設定珠盤 ROI
+                roi_config = full_config.get("bead_plate_roi", {})
+                if roi_config and all(k in roi_config for k in ["x", "y", "w", "h"]):
+                    self._result_detector.set_bead_plate_roi(
+                        x=roi_config["x"],
+                        y=roi_config["y"],
+                        w=roi_config["w"],
+                        h=roi_config["h"]
+                    )
+                    self._emit_log("INFO", "BeadPlate", "✅ 珠盤 ROI 配置載入成功")
+                else:
+                    self._emit_log("WARNING", "BeadPlate", "未配置珠盤 ROI")
+
+                # 健康檢查
+                ok, msg = self._result_detector.health_check()
+                if ok:
+                    self._emit_log("INFO", "BeadPlate", f"✅ 健康檢查通過: {msg}")
+                else:
+                    self._emit_log("WARNING", "BeadPlate", f"⚠️ 健康檢查失敗: {msg}")
+            else:
+                self._emit_log("WARNING", "BeadPlate", "未配置珠盤 ROI，請先進行配置")
+
+        except Exception as e:
+            self._emit_log("ERROR", "BeadPlate", f"初始化失敗: {e}")
+            self._result_detector = None
+
+    def _load_initial_beads(self) -> None:
+        """載入珠盤上已有的歷史珠子"""
+        if not self._result_detector:
+            self._emit_log("ERROR", "InitialBeads", "檢測器未初始化")
             return
 
-        if self._t9_client:
+        try:
+            self._emit_log("INFO", "InitialBeads", "開始檢測珠盤上已有的珠子...")
+
+            # 截取當前螢幕
+            import mss
+            import numpy as np
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]
+                screenshot = sct.grab(monitor)
+                img = np.array(screenshot)
+
+                self._emit_log("DEBUG", "InitialBeads", f"截圖尺寸: {img.shape}")
+
+                # 轉換為 BGR (OpenCV 格式)
+                if img.shape[2] == 4:  # BGRA
+                    img = img[:, :, :3]  # 去掉 alpha 通道
+                img = img[:, :, ::-1]  # RGB -> BGR
+
+                # 檢查 ROI 配置
+                if self._result_detector.roi:
+                    roi = self._result_detector.roi
+                    self._emit_log("DEBUG", "InitialBeads",
+                                 f"珠盤 ROI: x={roi['x']}, y={roi['y']}, w={roi['w']}, h={roi['h']}")
+                else:
+                    self._emit_log("WARNING", "InitialBeads", "珠盤 ROI 未設置")
+
+                # 呼叫檢測器的 detect_initial_beads 方法
+                initial_beads = self._result_detector.detect_initial_beads(img)
+
+                if initial_beads:
+                    self._emit_log("INFO", "InitialBeads", f"檢測到 {len(initial_beads)} 顆歷史珠子")
+
+                    # 將每個珠子作為檢測結果發送給策略追蹤器
+                    for i, bead in enumerate(initial_beads):
+                        winner = bead["winner"]
+                        timestamp = bead["timestamp"]
+
+                        # 生成唯一的 round_id (使用序號確保每個珠子有不同的 ID)
+                        round_id = f"initial-{int(timestamp * 1000)}-{i}"
+
+                        # 發送給 SignalTracker
+                        if self._line_orchestrator:
+                            for _, tracker in self._line_orchestrator.signal_trackers.items():
+                                tracker.record("main", winner, timestamp)
+
+                        # 發送狀態更新 (讓 Dashboard 顯示)
+                        result_info = {
+                            "winner": winner,
+                            "received_at": timestamp,
+                            "round_id": round_id,
+                            "table_id": "main",
+                            "source": "initial_bead"
+                        }
+
+                        self.status_updated.emit({
+                            "main": result_info,
+                            "lines": self._get_line_status(),
+                            "timestamp": time.time()
+                        })
+
+                        winner_map = {"B": "莊", "P": "閒", "T": "和"}
+                        self._emit_log("DEBUG", "InitialBeads",
+                                     f"載入珠子 #{i+1}: {winner_map.get(winner, winner)}")
+
+                    self._emit_log("INFO", "InitialBeads",
+                                 f"✅ 成功載入 {len(initial_beads)} 顆歷史珠子到策略追蹤器")
+                else:
+                    self._emit_log("INFO", "InitialBeads", "珠盤上沒有檢測到歷史珠子（可能是空盤）")
+
+        except Exception as e:
+            self._emit_log("ERROR", "InitialBeads", f"載入歷史珠子失敗: {e}")
+            import traceback
+            self._emit_log("ERROR", "InitialBeads", traceback.format_exc())
+
+    def _start_result_detection(self) -> None:
+        """啟動結果檢測循環"""
+        if not self._result_detector:
+            self._emit_log("ERROR", "ResultDetector", "檢測器未初始化")
             return
 
-        base_url = os.getenv("T9_STREAM_URL", "").strip()
-        if not base_url:
-            base_url = "http://127.0.0.1:8000/api/stream"  # 預設值
-            self._emit_log("WARNING", "T9Stream", f"⚠️ T9_STREAM_URL 未設定，使用預設: {base_url}")
-            self._emit_log("WARNING", "T9Stream", "請確認 T9 Web API 伺服器已啟動，否則無法接收開獎結果！")
+        # 注意：初始珠子檢測功能已暫時停用
+        # 原因：珠盤格子（垂直長條）與開獎結果珠子（圓形）形狀差異太大
+        # 無法用同一套參數同時檢測兩者
+        # self._load_initial_beads()
 
-        event_types = os.getenv("T9_STREAM_EVENT_TYPES", "result")
+        # 建立 QTimer（必須在 QThread 內部建立）
+        self._detection_timer = QTimer()
+        self._detection_timer.timeout.connect(self._on_detection_tick)
+        self._detection_timer.start(200)  # 每 200ms 檢測一次
+        self._detection_enabled = True
+        self._emit_log("INFO", "ResultDetector", "檢測循環已啟動 (200ms)")
+        self._emit_log("INFO", "ResultDetector", "💡 啟動後將從新結果開始記錄")
 
-        retry_env = os.getenv("T9_STREAM_RETRY_SEC", "5")
+    def _on_detection_tick(self) -> None:
+        """檢測循環回調"""
+        if not self._detection_enabled or not self._result_detector:
+            return
+
         try:
-            retry_delay = float(retry_env)
-        except ValueError:
-            retry_delay = 5.0
+            # 截取螢幕
+            import mss
+            with mss.mss() as sct:
+                # 截取主螢幕
+                monitor = sct.monitors[1]
+                screenshot = sct.grab(monitor)
+                # 轉換為 numpy array
+                img = np.array(screenshot)
+                # 轉換顏色 BGRA -> BGR
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
-        timeout_env = os.getenv("T9_STREAM_TIMEOUT_SEC", "65")
-        try:
-            request_timeout = float(timeout_env)
-        except ValueError:
-            request_timeout = 65.0
+            # 執行檢測
+            result = self._result_detector.process_frame(img)
 
-        headers = {"Accept": "text/event-stream"}
-        ingest_key = os.getenv("T9_STREAM_INGEST_KEY")
-        if ingest_key:
-            headers["x-ingest-key"] = ingest_key
+            # 如果檢測到結果（只在 state=detected 時才發送事件）
+            if result.winner and result.state == "detected":
+                winner_map = {"B": "莊", "P": "閒", "T": "和"}
+                winner_text = winner_map.get(result.winner, result.winner)
 
-        self._t9_client = T9StreamClient(
-            base_url,
-            event_types=event_types,
-            headers=headers,
-            retry_delay=retry_delay,
-            request_timeout=request_timeout,
-            on_event=self._on_t9_raw_event,
-            on_status=self._on_t9_status,
-        )
+                # 使用檢測時間的毫秒級時間戳作為 round_id（確保唯一性）
+                round_id = f"detect-{int(result.detected_at * 1000)}"
 
-        self._emit_log("INFO", "T9Stream", f"🔌 正在連線: {base_url}")
-        self._t9_client.start()
+                # 產生事件
+                event = {
+                    "type": "RESULT",
+                    "winner": result.winner,
+                    "source": "image_detection",
+                    "confidence": result.confidence,
+                    "received_at": int(result.detected_at * 1000),
+                    "table_id": self._selected_table or "main",  # 單桌模式
+                    "round_id": round_id
+                }
 
-        # 提示用戶檢查連線狀態
-        self._emit_log("INFO", "T9Stream", "請確認 T9 Web API 伺服器正在運行，否則無法收到開獎結果")
+                self._incoming_events.put(event)
+                self._emit_log(
+                    "INFO",
+                    "ResultDetector",
+                    f"✅ 檢測到結果: {winner_text} (信心: {result.confidence:.3f})"
+                )
+
+        except Exception as e:
+            self._emit_log("ERROR", "ResultDetector", f"檢測錯誤: {e}")
 
     # ------------------------------------------------------------------
     def _drain_incoming_events(self) -> None:
@@ -882,56 +1021,6 @@ class EngineWorker(QThread):
                 self._handle_event(evt)
         self._drain_line_orders_queue()
 
-    # ------------------------------------------------------------------
-    def _on_t9_status(self, status: str, detail: Optional[str]) -> None:
-        if status == self._t9_status and status not in {"error"}:
-            return
-        self._t9_status = status
-
-        if status == "connecting":
-            self._emit_log("INFO", "T9Stream", f"🔄 連線中... {detail or ''}")
-        elif status == "connected":
-            self._emit_log("INFO", "T9Stream", "✅ 已連線，等待開獎結果...")
-        elif status == "error":
-            self._emit_log("ERROR", "T9Stream", f"❌ 連線錯誤: {detail}")
-        elif status == "disconnected":
-            self._emit_log("WARNING", "T9Stream", "⚠️ 已斷線，準備重新連線...")
-        elif status == "stopped":
-            self._emit_log("INFO", "T9Stream", "⏹️ 已停止")
-
-    # ------------------------------------------------------------------
-    def _on_t9_raw_event(self, event_name: str, payload: Dict[str, Any]) -> None:
-        event_type = (payload.get("event_type") or event_name or "").lower()
-
-        if event_type != "result":
-            # 忽略 heartbeat / 其他事件（靜默）
-            return
-
-        record: Optional[Dict[str, Any]] = None
-        if isinstance(payload.get("payload"), dict):
-            record = payload["payload"].get("record")
-        if record is None:
-            record = payload.get("record")
-
-        if not isinstance(record, dict):
-            return
-
-        # 只處理選定桌號的事件（提前過濾）
-        table_id = record.get("table_id") or record.get("tableId") or record.get("table")
-        if not self._is_selected_table(table_id):
-            return  # 靜默忽略非選定桌號
-
-        event, info = self._convert_t9_record_to_event(record)
-        if info:
-            message = self._format_t9_log_message(info)
-            self._emit_table_log(info.get("level", "INFO"), info.get("table_id"), message)
-            self._process_line_state(info)
-
-        if event:
-            self._emit_log("DEBUG", "T9Stream", f"✅ 產生 RESULT event: table={event.get('table_id')} winner={event.get('winner')}")
-            self._incoming_events.put(event)
-        else:
-            self._emit_log("DEBUG", "T9Stream", f"⚠️ 未產生 event (可能是狀態更新而非開獎)")
     # ------------------------------------------------------------------
     def _process_line_state(self, info: Dict[str, Any]) -> None:
         if not self._line_orchestrator:
@@ -1145,102 +1234,3 @@ class EngineWorker(QThread):
         except Exception as e:
             self._emit_log("ERROR", "Line", f"處理 Line 訂單錯誤: {e}")
 
-    # ------------------------------------------------------------------
-    def _convert_t9_record_to_event(self, record: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-        info = self._classify_t9_state(record)
-        winner = info.get("winner")
-        table_id = info.get("table_id")
-        round_id = info.get("round_id")
-
-        event: Optional[Dict[str, Any]] = None
-        if winner:
-            event = {
-                "type": "RESULT",
-                "winner": winner,
-                "source": "t9_stream",
-                "received_at": int(time.time() * 1000),
-                "raw": record,
-            }
-            if table_id:
-                event["table_id"] = str(table_id)
-            if round_id is not None:
-                event["round_id"] = str(round_id)
-
-        return event, info
-
-    # ------------------------------------------------------------------
-    def _extract_t9_winner(self, record: Dict[str, Any]) -> (Optional[str], Optional[str]):
-        game_result = record.get("gameResult")
-        cancel_detected = False
-
-        if isinstance(game_result, dict):
-            result_code = game_result.get("result")
-            mapped = self._map_t9_result_code(result_code)
-            if mapped:
-                return mapped, None
-            if result_code == 3:
-                cancel_detected = True
-
-            text_winner = self._map_t9_text(game_result.get("win_lose_result"))
-            if text_winner:
-                return text_winner, None
-
-        # 其他欄位
-        candidates = [
-            record.get("win_lose_result"),
-            record.get("result"),
-            record.get("game_result"),
-            record.get("gameResult") if isinstance(game_result, str) else None,
-        ]
-        for item in candidates:
-            mapped = self._map_t9_text(item)
-            if mapped:
-                return mapped, None
-
-        if cancel_detected:
-            return None, "cancelled"
-
-        return None, None
-
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _map_t9_result_code(code: Optional[int]) -> Optional[str]:
-        if code is None:
-            return None
-        mapping = {0: "B", 1: "P", 2: "T"}
-        return mapping.get(code)
-
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _map_t9_text(value: Optional[Any]) -> Optional[str]:
-        if value is None:
-            return None
-        text = str(value).strip()
-        if not text:
-            return None
-
-        lowered = text.lower()
-        if any(keyword in lowered for keyword in ["cancel", "無效", "取消", "invalid", "void"]):
-            return None
-
-        upper = text.upper()
-        direct_map = {
-            "BANKER": "B",
-            "B": "B",
-            "PLAYER": "P",
-            "P": "P",
-            "TIE": "T",
-            "T": "T",
-        }
-        if upper in direct_map:
-            return direct_map[upper]
-
-        normalized = text.replace("\u3000", "").replace(" ", "")
-        if any(ch in normalized for ch in ["莊", "庄"]):
-            return "B"
-        if any(ch in normalized for ch in ["閒", "闲", "閑"]):
-            return "P"
-        if any(ch in normalized for ch in ["和", "平"]):
-            return "T"
-
-        return None

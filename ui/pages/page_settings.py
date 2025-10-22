@@ -117,18 +117,19 @@ class PresetManager(QFrame):
         else:
             status_lines.append("❌ Positions: 未找到")
 
-        # 檢查 strategy.json
-        if os.path.exists("configs/strategy.json"):
+        # 檢查線路策略 (新系統)
+        strategy_dir = "configs/line_strategies"
+        if os.path.exists(strategy_dir):
             try:
-                with open("configs/strategy.json", "r", encoding="utf-8") as f:
-                    strategy_data = json.load(f)
-                target = strategy_data.get("target", "?")
-                unit = strategy_data.get("unit", 0)
-                status_lines.append(f"✅ Strategy: {target}, {unit} unit")
+                strategy_files = [f for f in os.listdir(strategy_dir) if f.endswith('.json')]
+                if strategy_files:
+                    status_lines.append(f"✅ Strategy: {len(strategy_files)} 個策略")
+                else:
+                    status_lines.append("❌ Strategy: 沒有策略")
             except:
                 status_lines.append("❌ Strategy: 無法讀取")
         else:
-            status_lines.append("❌ Strategy: 未找到")
+            status_lines.append("❌ Strategy: 未找到目錄")
 
         # 檢查模板
         template_count = 0
@@ -155,10 +156,17 @@ class PresetManager(QFrame):
 
         try:
             with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                # 包含基本配置
                 files_to_include = [
-                    "configs/positions.json",
-                    "configs/strategy.json"
+                    "configs/positions.json"
                 ]
+
+                # 包含所有線路策略
+                strategy_dir = "configs/line_strategies"
+                if os.path.exists(strategy_dir):
+                    for f in os.listdir(strategy_dir):
+                        if f.endswith('.json'):
+                            files_to_include.append(os.path.join(strategy_dir, f))
 
                 included_files = []
                 for file_path_to_zip in files_to_include:
@@ -216,10 +224,19 @@ class PresetManager(QFrame):
                 loaded_files = []
 
                 # 解壓配置文件
-                for file_name in ["positions.json", "strategy.json"]:
-                    if file_name in zf.namelist():
-                        zf.extract(file_name, "configs/")
-                        loaded_files.append(file_name)
+                if "positions.json" in zf.namelist():
+                    zf.extract("positions.json", "configs/")
+                    loaded_files.append("positions.json")
+
+                # 解壓線路策略
+                os.makedirs("configs/line_strategies", exist_ok=True)
+                for file_info in zf.infolist():
+                    if file_info.filename.startswith("line_strategies/") and file_info.filename.endswith('.json'):
+                        target_path = os.path.join("configs", file_info.filename)
+                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                        with zf.open(file_info) as source, open(target_path, 'wb') as target:
+                            target.write(source.read())
+                        loaded_files.append(file_info.filename)
 
                 # 解壓模板文件
                 for file_info in zf.infolist():
@@ -255,8 +272,12 @@ class PresetManager(QFrame):
             except:
                 pass
 
-        if os.path.exists("configs/strategy.json"):
-            APP_STATE.strategyChanged.emit({'complete': True})
+        # 檢查線路策略
+        strategy_dir = "configs/line_strategies"
+        if os.path.exists(strategy_dir):
+            strategy_files = [f for f in os.listdir(strategy_dir) if f.endswith('.json')]
+            if strategy_files:
+                APP_STATE.strategyChanged.emit({'complete': True, 'count': len(strategy_files)})
 
 class SettingsPage(QWidget):
     """系統設定頁面"""

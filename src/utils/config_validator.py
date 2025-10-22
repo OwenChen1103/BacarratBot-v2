@@ -23,7 +23,7 @@ class ConfigValidator:
     def __init__(self):
         self.chip_profile_path = "configs/chip_profiles/default.json"
         self.positions_path = "configs/positions.json"
-        self.strategy_path = "configs/strategy.json"
+        self.strategy_dir = "configs/line_strategies"
 
     def validate_all(self) -> Dict[str, ValidationResult]:
         """
@@ -207,48 +207,66 @@ class ConfigValidator:
 
     def validate_strategy(self) -> ValidationResult:
         """
-        驗證策略配置
+        驗證策略配置 (新版 Line Strategies)
 
-        檢查strategy.json是否存在且有效
+        檢查 line_strategies 目錄是否存在且有策略
         """
         details = []
         missing = []
 
-        if not os.path.exists(self.strategy_path):
+        if not os.path.exists(self.strategy_dir):
             return ValidationResult(
                 complete=False,
-                message="❌ 策略配置不存在",
+                message="❌ 策略目錄不存在",
                 details=["請先在「策略設定」頁面創建策略"],
-                missing_items=["strategy_file"]
+                missing_items=["strategy_dir"]
             )
 
         try:
-            with open(self.strategy_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            # 列出所有策略文件
+            strategy_files = [
+                f for f in os.listdir(self.strategy_dir)
+                if f.endswith('.json')
+            ]
 
-            # 檢查必要欄位（兼容 target 和 targets）
-            required_fields = {
-                'target_or_targets': ['target', 'targets'],  # 二選一
-                'unit': ['unit'],
-            }
+            if not strategy_files:
+                return ValidationResult(
+                    complete=False,
+                    message="❌ 沒有任何策略",
+                    details=["請在「策略設定」頁面新增至少一個策略"],
+                    missing_items=["no_strategies"]
+                )
 
-            for field_name, field_options in required_fields.items():
-                found = any(opt in data for opt in field_options)
-                if not found:
-                    details.append(f"❌ 缺少欄位: {' 或 '.join(field_options)}")
-                    missing.append(f"strategy_{field_name}")
-                else:
-                    found_field = next(opt for opt in field_options if opt in data)
-                    details.append(f"✅ {found_field} 已設定")
+            # 驗證每個策略文件
+            valid_count = 0
+            for filename in strategy_files:
+                filepath = os.path.join(self.strategy_dir, filename)
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
 
-            # 檢查unit是否合理
-            unit = data.get('unit', 0)
-            if unit <= 0:
-                details.append(f"❌ 單位金額無效: {unit}")
-                missing.append("strategy_unit_invalid")
+                    # 檢查必要欄位
+                    required_fields = ['strategy_key', 'entry', 'staking']
+                    missing_fields = [f for f in required_fields if f not in data]
 
-            complete = len(missing) == 0
-            message = "✅ 策略配置完整" if complete else f"⚠️ 策略配置不完整"
+                    if missing_fields:
+                        details.append(f"❌ {filename}: 缺少欄位 {missing_fields}")
+                    else:
+                        valid_count += 1
+                        details.append(f"✅ {filename}: 策略有效")
+
+                except Exception as e:
+                    details.append(f"❌ {filename}: 讀取失敗 - {str(e)}")
+
+            # 判斷是否完整
+            complete = valid_count > 0 and valid_count == len(strategy_files)
+            if complete:
+                message = f"✅ 策略配置完整 ({valid_count} 個策略)"
+            elif valid_count > 0:
+                message = f"⚠️ 部分策略有效 ({valid_count}/{len(strategy_files)})"
+            else:
+                message = "❌ 所有策略都無效"
+                missing.append("all_strategies_invalid")
 
             return ValidationResult(
                 complete=complete,

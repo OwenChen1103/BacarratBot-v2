@@ -1650,9 +1650,15 @@ class DashboardPage(QWidget):
             QMessageBox.warning(self, "配置缺失", "未找到 positions.json\n請先完成位置校準！")
             return False
 
-        # 檢查 strategy.json
-        if not os.path.exists("configs/strategy.json"):
-            QMessageBox.warning(self, "配置缺失", "未找到 strategy.json\n請先完成策略設定！")
+        # 檢查線路策略 (新系統)
+        strategy_dir = "configs/line_strategies"
+        if not os.path.exists(strategy_dir):
+            QMessageBox.warning(self, "配置缺失", "未找到線路策略目錄\n請先在「策略設定」頁面創建策略！")
+            return False
+
+        strategy_files = [f for f in os.listdir(strategy_dir) if f.endswith('.json')]
+        if not strategy_files:
+            QMessageBox.warning(self, "配置缺失", "未找到任何線路策略\n請先在「策略設定」頁面創建策略！")
             return False
 
         # 檢查模板路徑（在 positions.json 的 overlay_params 中）

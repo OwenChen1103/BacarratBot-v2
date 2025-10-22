@@ -136,20 +136,9 @@ class NextBetCard(QFrame):
                     self._update_strategy_display()
                     return
             except Exception as e:
-                pass  # 如果失敗，回退到舊系統
-
-        # 回退到舊系統 strategy.json
-        strategy_path = "configs/strategy.json"
-        if os.path.exists(strategy_path):
-            try:
-                with open(strategy_path, 'r', encoding='utf-8') as f:
-                    self.strategy_data = json.load(f)
-                self.strategy_data['_type'] = 'legacy_strategy'  # 標記類型
-                self._update_strategy_display()
-            except Exception as e:
                 self.strategy_config_label.setText(f"❌ 策略載入失敗: {e}")
         else:
-            self.strategy_config_label.setText("❌ 策略配置文件不存在")
+            self.strategy_config_label.setText("❌ 未找到線路策略，請先在「策略設定」頁面創建策略")
 
     def _update_strategy_display(self) -> None:
         """更新策略配置顯示"""
@@ -160,11 +149,10 @@ class NextBetCard(QFrame):
         strategy_type = self.strategy_data.get('_type', 'unknown')
 
         if strategy_type == 'line_strategy':
-            # 新系統：line_strategies 格式
+            # 線路策略格式
             self._display_line_strategy()
         else:
-            # 舊系統：strategy.json 格式
-            self._display_legacy_strategy()
+            self.strategy_config_label.setText("❌ 未知的策略格式")
 
     def _display_line_strategy(self) -> None:
         """顯示 line_strategy 格式的策略"""
@@ -196,46 +184,6 @@ class NextBetCard(QFrame):
             f"策略:{strategy_key} | 模式:{pattern}\n"
             f"序列:{sequence_text}\n"
             f"{advance_text} | {reset_text} | {stack_text}"
-        )
-
-        self.strategy_config_label.setText(config_text)
-
-    def _display_legacy_strategy(self) -> None:
-        """顯示舊格式 strategy.json 的策略"""
-        # 基本策略信息
-        unit = self.strategy_data.get('unit', 0)
-        targets = self.strategy_data.get('targets', self.strategy_data.get('target', []))
-        if isinstance(targets, str):
-            targets = [targets]
-
-        # 目標轉換
-        target_map = {
-            'banker': '莊',
-            'player': '閒',
-            'tie': '和'
-        }
-        target_text = '/'.join([target_map.get(t, t) for t in targets])
-
-        # 馬丁格爾設定
-        martingale = self.strategy_data.get('martingale', {})
-        martingale_enabled = martingale.get('enabled', False)
-        max_level = martingale.get('max_level', 0)
-
-        # 風控設定
-        risk = self.strategy_data.get('risk_control', {})
-        max_loss = risk.get('max_loss', 0)
-        max_win = risk.get('max_win', 0)
-
-        # 限制設定
-        limits = self.strategy_data.get('limits', {})
-        per_round_cap = limits.get('per_round_cap', 0)
-
-        # 構建緊湊顯示文本（兩列顯示）
-        martingale_text = f"開 Lv{max_level}" if martingale_enabled else "關"
-
-        config_text = (
-            f"單位:{unit}元 | 目標:{target_text} | 單局上限:{per_round_cap}元\n"
-            f"馬丁:{martingale_text} | 止損:{max_loss}元 | 止盈:{max_win}元"
         )
 
         self.strategy_config_label.setText(config_text)

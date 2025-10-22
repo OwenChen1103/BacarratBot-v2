@@ -344,15 +344,17 @@ class EngineWorker(QThread):
                 self._emit_log("ERROR", "Config", "未找到 configs/positions.json")
                 return False
 
-            # 載入 strategy.json
-            if os.path.exists("configs/strategy.json"):
-                success = self.engine.load_strategy("configs/strategy.json")
-                if not success:
-                    self._emit_log("ERROR", "Config", "載入 strategy.json 失敗")
+            # 載入線路策略 (新系統)
+            strategy_dir = "configs/line_strategies"
+            if os.path.exists(strategy_dir):
+                strategy_files = [f for f in os.listdir(strategy_dir) if f.endswith('.json')]
+                if strategy_files:
+                    self._emit_log("INFO", "Config", f"✅ 找到 {len(strategy_files)} 個線路策略")
+                else:
+                    self._emit_log("ERROR", "Config", "未找到任何線路策略，請先在「策略設定」頁面創建策略")
                     return False
-                self._emit_log("INFO", "Config", "✅ strategy.json 載入成功")
             else:
-                self._emit_log("ERROR", "Config", "未找到 configs/strategy.json")
+                self._emit_log("ERROR", "Config", "未找到 configs/line_strategies 目錄")
                 return False
 
             # 初始化引擎組件 (detector, actuator 等)
@@ -750,7 +752,7 @@ class EngineWorker(QThread):
         per_table_pct = float(os.getenv("LINE_PER_TABLE_PCT", "0.1") or 0.1)
         per_hand_cap_env = os.getenv("LINE_PER_HAND_CAP")
         per_hand_cap = float(per_hand_cap_env) if per_hand_cap_env else None
-        max_tables = int(os.getenv("LINE_MAX_CONCURRENT_TABLES", "3") or 3)
+        max_tables = int(os.getenv("LINE_MAX_CONCURRENT_TABLES", "10") or 10)  # 提高併發桌數上限
         min_unit = float(os.getenv("LINE_MIN_BET_UNIT", "1") or 1.0)
         strategy_dir_env = os.getenv("LINE_STRATEGY_DIR", "configs/line_strategies")
         strategy_dir = Path(strategy_dir_env)

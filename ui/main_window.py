@@ -21,6 +21,8 @@ from .pages.page_live_monitor import LiveMonitorPage
 from .pages.page_result_detection import PageResultDetection
 from .app_state import APP_STATE
 from .components.toast import show_toast
+from .dialogs.setup_wizard import SetupWizard
+from src.utils.config_validator import ConfigValidator
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -84,6 +86,9 @@ class MainWindow(QMainWindow):
 
         # 初始化時檢查現有配置狀態
         self._check_initial_state()
+
+        # 延遲顯示設定精靈 (讓主視窗先顯示)
+        QTimer.singleShot(500, self._show_setup_wizard_if_needed)
 
     def _build_menu(self):
         menubar = self.menuBar()
@@ -159,16 +164,16 @@ class MainWindow(QMainWindow):
             except:
                 pass
 
-        # 檢查 strategy.json
-        if os.path.exists("configs/strategy.json"):
+        # 檢查線路策略 (新系統)
+        strategy_dir = "configs/line_strategies"
+        if os.path.exists(strategy_dir):
             try:
-                with open("configs/strategy.json", "r", encoding="utf-8") as f:
-                    strategy_data = json.load(f)
-                APP_STATE.strategyChanged.emit({
-                    'complete': True,
-                    'target': strategy_data.get('target', ''),
-                    'unit': strategy_data.get('unit', 0)
-                })
+                strategy_files = [f for f in os.listdir(strategy_dir) if f.endswith('.json')]
+                if strategy_files:
+                    APP_STATE.strategyChanged.emit({
+                        'complete': True,
+                        'count': len(strategy_files)
+                    })
             except:
                 pass
 
@@ -189,3 +194,69 @@ class MainWindow(QMainWindow):
             'missing': [] if template_ready else ['qing'],
             'total': 1 if template_ready else 0
         })
+
+    def _show_setup_wizard_if_needed(self):
+        """顯示設定精靈 (如果需要)"""
+        # 檢查是否跳過精靈
+        settings_path = "configs/settings.json"
+        skip_wizard = False
+
+        if os.path.exists(settings_path):
+            try:
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+                    skip_wizard = settings.get("skip_setup_wizard", False)
+            except:
+                pass
+
+        if skip_wizard:
+            return
+
+        # 檢查配置完整度
+        validator = ConfigValidator()
+        summary = validator.get_config_summary()
+
+        # 如果未完成,顯示精靈
+        if not summary['ready_for_battle']:
+            wizard = SetupWizard(self)
+            result = wizard.exec()
+
+            # 儲存「不再顯示」偏好
+            if wizard.should_save_preference():
+                self._save_wizard_preference(True)
+
+            # 如果用戶點擊「前往設定」,跳轉到對應頁面
+            if result == SetupWizard.Accepted:
+                target_page = wizard.get_target_page()
+                if target_page:
+                    page_mapping = {
+                        "chip_setup": "chip_profile",
+                        "roi_setup": "overlay",
+                        "strategy_setup": "strategy",
+                        "overlay_setup": "overlay",
+                    }
+                    page_key = page_mapping.get(target_page)
+                    if page_key:
+                        self.switch_to_page(page_key)
+
+    def _save_wizard_preference(self, skip: bool):
+        """儲存精靈偏好設定"""
+        import json
+        settings_path = "configs/settings.json"
+        settings = {}
+
+        if os.path.exists(settings_path):
+            try:
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+            except:
+                pass
+
+        settings["skip_setup_wizard"] = skip
+
+        try:
+            os.makedirs("configs", exist_ok=True)
+            with open(settings_path, "w", encoding="utf-8") as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"儲存設定失敗: {e}")

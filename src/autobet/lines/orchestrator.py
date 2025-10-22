@@ -670,10 +670,16 @@ class LineOrchestrator:
 
         for approved in resolution.approved:
             # 預留資金
+            active_tables_count = len(self.capital.table_positions)
+            self._record_event(
+                "DEBUG",
+                f"資金池狀態: table_positions={list(self.capital.table_positions.keys())}, active_tables={active_tables_count}, max={self.capital.max_concurrent_tables}",
+                {"table": table_id},
+            )
             reserve = self.capital.reserve(
                 table_id,
                 approved.amount,
-                active_tables=len(self.capital.table_positions)
+                active_tables=active_tables_count
             )
             if not reserve.ok:
                 self._record_event(

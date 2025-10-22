@@ -33,7 +33,9 @@ def main():
         print(f"Detail: {e}")
         sys.exit(1)
     except Exception as e:
+        import traceback
         print(f"GUI startup error: {e}")
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

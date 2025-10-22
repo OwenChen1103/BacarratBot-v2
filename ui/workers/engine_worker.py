@@ -9,6 +9,7 @@ import numpy as np
 from src.autobet.autobet_engine import AutoBetEngine
 from src.autobet.chip_profile_manager import ChipProfileManager
 from src.autobet.detectors import BeadPlateResultDetector
+from src.autobet.phase_detector import PhaseDetector
 from src.autobet.lines import (
     LineOrchestrator,
     TablePhase,
@@ -141,6 +142,9 @@ class EngineWorker(QThread):
         self._detection_timer: Optional[QTimer] = None
         self._detection_enabled = False
 
+        # PhaseDetector 相關狀態
+        self._phase_detector: Optional[PhaseDetector] = None
+
         self._latest_results: Dict[str, Dict[str, Any]] = {}
         self._line_orchestrator: Optional[LineOrchestrator] = None
         self._line_order_queue: "queue.Queue[BetDecision]" = queue.Queue()
@@ -182,6 +186,9 @@ class EngineWorker(QThread):
             # 開始狀態輪詢
             self._tick_running = True
             self._init_line_orchestrator()
+
+            # 初始化 PhaseDetector（階段檢測器）
+            self._setup_phase_detector()
 
             # 初始化 ResultDetector（但不啟動檢測）
             self._setup_result_detector()
@@ -456,19 +463,9 @@ class EngineWorker(QThread):
                     self._save_line_state()
                     self._flush_line_events()
 
-                    # WORKAROUND: 某些階段事件可能不會發送
-                    # 在 RESULT 後立即觸發 BETTABLE 階段檢查，模擬下一局開始下注
-                    # 這樣可以讓 LineOrchestrator 檢查是否滿足策略條件
-                    next_round_id = f"{round_id}_next"  # 模擬下一局的 round_id
-                    decisions = self._line_orchestrator.update_table_phase(
-                        table_id, next_round_id, TablePhase.BETTABLE, ts_sec + 1.0
-                    )
-                    if decisions:
-                        self._emit_log("INFO", "Line", f"✅ 檢測到觸發條件，產生 {len(decisions)} 個下注決策")
-                        self._handle_line_decisions(decisions)
-                    self._line_summary = self._line_orchestrator.snapshot()
-                    self._save_line_state()
-                    self._flush_line_events()
+                    # 階段檢測現在由 PhaseDetector 自動處理
+                    # PhaseDetector 會在 SETTLING → BETTABLE → LOCKED 的適當時機
+                    # 通過 phase_changed 信號觸發 _on_phase_changed()
                 else:
                     self._emit_log("WARNING", "Engine", f"⚠️ 跳過 Line 處理: orchestrator={has_orchestrator}, table={has_table}, round={has_round}")
 
@@ -728,17 +725,19 @@ class EngineWorker(QThread):
         threading.Thread(target=_run, name="TriggerClickSequence", daemon=True).start()
 
     def set_selected_table(self, table_id: str):
-        """設定選定的桌號（內部統一使用 canonical ID）"""
-        # 標準化為 canonical ID (T9 原始桌號)
-        canonical_id = self._normalize_table_id(table_id)
-        self._selected_table = canonical_id
+        """
+        設定選定的桌號（單桌模式）
 
-        # 顯示友善的日誌訊息
-        if canonical_id != table_id:
-            display_name = TABLE_DISPLAY_MAP.get(canonical_id, canonical_id)
-            self._emit_log("INFO", "Strategy", f"🎯 開始追蹤桌號: {display_name} ({canonical_id})")
-        else:
-            self._emit_log("INFO", "Strategy", f"🎯 開始追蹤桌號: {canonical_id}")
+        注意：系統運行於單桌模式，所有事件固定分配到 table_id = "main"
+        此方法保留接口以便未來擴展，但當前強制設為 "main"
+
+        Args:
+            table_id: 桌號（當前忽略，固定使用 "main"）
+        """
+        # 單桌模式：固定為 "main"，忽略傳入的 table_id
+        _ = table_id  # 保留參數以便未來擴展
+        self._selected_table = "main"
+        self._emit_log("INFO", "Strategy", f"🎯 單桌模式：追蹤桌號 main")
 
     def quit(self):
         self._tick_running = False
@@ -747,25 +746,23 @@ class EngineWorker(QThread):
 
     # ------------------------------------------------------------------
     def _init_line_orchestrator(self) -> None:
-        bankroll = float(os.getenv("LINE_BANKROLL", "10000") or 10000)
-        per_hand_pct = float(os.getenv("LINE_PER_HAND_PCT", "0.05") or 0.05)
-        per_table_pct = float(os.getenv("LINE_PER_TABLE_PCT", "0.1") or 0.1)
-        per_hand_cap_env = os.getenv("LINE_PER_HAND_CAP")
-        per_hand_cap = float(per_hand_cap_env) if per_hand_cap_env else None
-        max_tables = int(os.getenv("LINE_MAX_CONCURRENT_TABLES", "10") or 10)  # 提高併發桌數上限
-        min_unit = float(os.getenv("LINE_MIN_BET_UNIT", "1") or 1.0)
+        """
+        初始化 Line 策略系統（單桌模式）
+
+        環境變數配置：
+        - LINE_STRATEGY_DIR: 策略目錄 (預設: configs/line_strategies)
+
+        注意：
+        - 系統只追蹤 PnL 和止盈止損，不做資金檢查
+        - 止盈止損配置在各策略的 risk.levels 中設定
+        - table_id 固定為 "main"（單桌模式）
+        """
         strategy_dir_env = os.getenv("LINE_STRATEGY_DIR", "configs/line_strategies")
         strategy_dir = Path(strategy_dir_env)
 
         try:
-            self._line_orchestrator = LineOrchestrator(
-                bankroll=bankroll,
-                per_hand_risk_pct=per_hand_pct,
-                per_table_risk_pct=per_table_pct,
-                per_hand_cap=per_hand_cap,
-                max_concurrent_tables=max_tables,
-                min_unit=min_unit,
-            )
+            # ✅ 不再需要 bankroll 相關參數
+            self._line_orchestrator = LineOrchestrator()
 
             if strategy_dir.exists():
                 definitions = load_strategy_definitions(strategy_dir)
@@ -810,6 +807,70 @@ class EngineWorker(QThread):
             self._line_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as exc:
             self._emit_log("ERROR", "Line", f"寫入 Line 狀態失敗: {exc}")
+
+    # ------------------------------------------------------------------
+    # PhaseDetector 相關方法
+    # ------------------------------------------------------------------
+
+    def _setup_phase_detector(self) -> None:
+        """初始化 PhaseDetector（階段檢測器）"""
+        try:
+            # 創建 PhaseDetector 實例
+            self._phase_detector = PhaseDetector(parent=self)
+
+            # 連接階段變化信號到處理函數
+            self._phase_detector.phase_changed.connect(self._on_phase_changed)
+
+            self._emit_log("INFO", "PhaseDetector", "✅ 階段檢測器初始化完成")
+
+        except Exception as e:
+            self._emit_log("ERROR", "PhaseDetector", f"初始化失敗: {e}")
+            self._phase_detector = None
+
+    def _on_phase_changed(self, table_id: str, round_id: str, phase: str, timestamp: float) -> None:
+        """
+        處理 PhaseDetector 發送的階段變化事件
+
+        Args:
+            table_id: 桌號
+            round_id: 局號
+            phase: 階段名稱 (bettable/locked)
+            timestamp: 時間戳
+        """
+        try:
+            if not self._line_orchestrator:
+                return
+
+            # 轉換為 TablePhase 枚舉
+            try:
+                table_phase = TablePhase(phase)
+            except ValueError:
+                self._emit_log("WARNING", "PhaseDetector", f"未知的階段: {phase}")
+                return
+
+            self._emit_log("DEBUG", "PhaseDetector",
+                          f"階段變化: table={table_id} round={round_id} phase={phase}")
+
+            # 通知 LineOrchestrator 階段變化，並接收決策
+            decisions = self._line_orchestrator.update_table_phase(
+                table_id, round_id, table_phase, timestamp
+            )
+
+            # 如果有決策產生，執行下注
+            if decisions:
+                self._emit_log("INFO", "PhaseDetector",
+                              f"✅ 階段 {phase} 觸發 {len(decisions)} 個下注決策")
+                self._handle_line_decisions(decisions)
+
+            # 更新狀態
+            self._line_summary = self._line_orchestrator.snapshot()
+            self._save_line_state()
+            self._flush_line_events()
+
+        except Exception as e:
+            self._emit_log("ERROR", "PhaseDetector", f"處理階段變化錯誤: {e}")
+            import traceback
+            self._emit_log("ERROR", "PhaseDetector", traceback.format_exc())
 
     # ------------------------------------------------------------------
     # ResultDetector 相關方法
@@ -1007,6 +1068,15 @@ class EngineWorker(QThread):
                     f"✅ 檢測到結果: {winner_text} (信心: {result.confidence:.3f})"
                 )
 
+                # 通知 PhaseDetector 開始階段轉換循環
+                if self._phase_detector:
+                    table_id = self._selected_table or "main"
+                    self._phase_detector.on_result_detected(table_id, round_id, result.winner)
+                    self._emit_log("DEBUG", "PhaseDetector",
+                                  f"已通知 PhaseDetector 開始階段循環: {round_id}")
+                else:
+                    self._emit_log("WARNING", "PhaseDetector", "PhaseDetector 未初始化")
+
         except Exception as e:
             self._emit_log("ERROR", "ResultDetector", f"檢測錯誤: {e}")
 
@@ -1197,37 +1267,66 @@ class EngineWorker(QThread):
                     'recipe': bet_plan.description
                 })
 
-                # 構建點擊計畫：[(target, chip_name), ...]
-                click_plan = []
-                for chip, count in bet_plan.recipe.items():
-                    chip_name = f"chip_{chip.value}"  # 例如 chip_100, chip_1000
-                    for _ in range(count):
-                        click_plan.append((target, chip_name))
-
                 self._emit_log(
                     "INFO",
                     "Line",
-                    f"✅ 籌碼配方: {bet_plan.description} (點擊{len(click_plan)}次)"
+                    f"✅ 籌碼配方: {bet_plan.recipe} (總點擊{bet_plan.clicks}次)"
                 )
 
-                # 執行下注序列
+                # 執行下注序列（帶詳細日誌和回滾）
                 if self.engine.act:
-                    try:
-                        # 依序執行每個籌碼的放置
-                        for chip, count in bet_plan.recipe.items():
-                            for _ in range(count):
-                                # 點擊籌碼
-                                if not self.engine.act.click_chip_value(chip.value):
-                                    raise Exception(f"點擊籌碼 {chip.value} 失敗")
-                                # 點擊下注區
-                                if not self.engine.act.click_bet(target):
-                                    raise Exception(f"點擊下注區 {target} 失敗")
+                    execution_log = []  # 記錄執行步驟，用於錯誤追蹤
 
-                        # 確認下注
+                    try:
+                        total_steps = len(bet_plan.chips)
+                        self._emit_log("INFO", "Line", f"🚀 開始執行下注序列 (共 {total_steps} 個籌碼)")
+
+                        # 依序執行每個籌碼的放置
+                        for idx, chip in enumerate(bet_plan.chips, 1):
+                            step_info = f"步驟 {idx}/{total_steps}"
+
+                            # 點擊籌碼
+                            chip_desc = f"點擊籌碼 {chip.value}"
+                            self._emit_log("DEBUG", "Line", f"  [{step_info}] {chip_desc}")
+                            execution_log.append(("chip", chip.value))
+
+                            if not self.engine.act.click_chip_value(chip.value):
+                                raise Exception(f"{step_info} 失敗: {chip_desc}")
+
+                            # 點擊下注區
+                            bet_desc = f"點擊下注區 {target}"
+                            self._emit_log("DEBUG", "Line", f"  [{step_info}] {bet_desc}")
+                            execution_log.append(("bet", target))
+
+                            if not self.engine.act.click_bet(target):
+                                raise Exception(f"{step_info} 失敗: {bet_desc}")
+
+                        # 所有步驟成功，確認下注
+                        self._emit_log("DEBUG", "Line", "  最後步驟: 確認下注")
                         self.engine.act.confirm()
                         self._emit_log("INFO", "Line", f"✅ 訂單執行完成: {decision.strategy_key}")
+
                     except Exception as e:
+                        # 執行失敗，記錄詳細錯誤和已執行步驟
                         self._emit_log("ERROR", "Line", f"❌ 執行下注失敗: {e}")
+
+                        # 記錄已執行的步驟
+                        if execution_log:
+                            executed_steps = " → ".join([f"{action}:{value}" for action, value in execution_log])
+                            self._emit_log("DEBUG", "Line", f"已執行步驟: {executed_steps}")
+
+                        # 嘗試回滾（取消不完整的下注）
+                        self._emit_log("WARNING", "Line", "🔄 嘗試回滾不完整的下注...")
+                        try:
+                            if self.engine.act.cancel():
+                                self._emit_log("INFO", "Line", "✅ 已成功取消不完整的下注")
+                            else:
+                                self._emit_log("WARNING", "Line", "⚠️ 取消操作未確認成功，請手動檢查遊戲畫面")
+                        except Exception as cancel_error:
+                            self._emit_log("ERROR", "Line", f"❌ 回滾失敗: {cancel_error}，請立即手動檢查遊戲畫面！")
+
+                        # 重新拋出異常，讓外層處理
+                        raise
                 else:
                     self._emit_log("ERROR", "Line", "Actuator 未初始化")
             else:

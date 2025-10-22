@@ -15,8 +15,9 @@ from .config import (
     RiskScope,
     StrategyDefinition,
 )
-from .conflict import ConflictResolver, PendingDecision
+from .conflict import ConflictResolver, PendingDecision, ConflictReason
 from .metrics import MetricsTracker, EventRecord, EventType, LatencyMetrics
+from .performance import PerformanceTracker
 from .signal import SignalTracker
 from .state import LayerOutcome, LayerProgression, LinePhase, LineState, LayerState
 
@@ -49,6 +50,34 @@ class BetDecision:
 
 
 @dataclass
+class ConflictRecord:
+    """衝突解決記錄（用於 UI 顯示）"""
+    table_id: str
+    round_id: str
+    timestamp: float
+    candidates_count: int  # 候選決策數量
+    approved_count: int    # 核准數量
+    rejected_count: int    # 拒絕數量
+    # 候選決策詳情
+    candidates: List[Dict[str, Any]] = field(default_factory=list)
+    # 拒絕原因詳情
+    rejections: List[Dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """轉換為字典"""
+        return {
+            "table_id": self.table_id,
+            "round_id": self.round_id,
+            "timestamp": self.timestamp,
+            "candidates_count": self.candidates_count,
+            "approved_count": self.approved_count,
+            "rejected_count": self.rejected_count,
+            "candidates": self.candidates,
+            "rejections": self.rejections,
+        }
+
+
+@dataclass
 class PendingPosition:
     table_id: str
     round_id: str
@@ -66,92 +95,50 @@ class OrchestratorEvent:
     metadata: Dict[str, str] = field(default_factory=dict)
 
 
-@dataclass
-class CapitalReserveResult:
-    ok: bool
-    amount: float
-    reason: Optional[str] = None
+# ❌ CapitalPool 已移除
+# 系統不再使用「資金池」概念，只追蹤 PnL 並執行止盈止損
+# 參考：RiskCoordinator 負責盈虧追蹤和風控
 
+class PositionTracker:
+    """
+    倉位追蹤器（僅用於 UI 顯示）
 
-class CapitalPool:
-    def __init__(
-        self,
-        bankroll: float,
-        per_hand_risk_pct: float,
-        per_table_risk_pct: float,
-        per_hand_cap: Optional[float],
-        max_concurrent_tables: int,
-        min_unit: float,
-    ) -> None:
-        self.bankroll_total = float(bankroll)
-        self.bankroll_free = float(bankroll)
-        self.per_hand_risk_pct = float(per_hand_risk_pct)
-        self.per_table_risk_pct = float(per_table_risk_pct)
-        self.per_hand_cap = float(per_hand_cap) if per_hand_cap is not None else None
-        self.max_concurrent_tables = int(max_concurrent_tables)
-        self.min_unit = float(min_unit)
-        self.table_exposure: Dict[str, float] = defaultdict(float)
-        self.table_positions: Dict[str, int] = defaultdict(int)
+    職責：
+    - 追蹤當前活躍倉位數量
+    - 不做資金檢查，不影響下注決策
+    - 只用於 UI 顯示「當前有幾個策略在跑」
+    """
+    def __init__(self) -> None:
+        self.active_positions: Dict[Tuple[str, str], float] = {}  # (table_id, strategy_key) -> amount
 
-    def reserve(self, table_id: str, requested: float, active_tables: int) -> CapitalReserveResult:
-        if requested <= 0:
-            return CapitalReserveResult(False, 0.0, "requested_amount <= 0")
+    def add_position(self, table_id: str, strategy_key: str, amount: float) -> None:
+        """記錄新倉位（下注後）"""
+        key = (table_id, strategy_key)
+        self.active_positions[key] = amount
 
-        if self.max_concurrent_tables > 0:
-            if table_id not in self.table_positions and active_tables >= self.max_concurrent_tables:
-                return CapitalReserveResult(False, 0.0, "max_concurrent_tables reached")
+    def remove_position(self, table_id: str, strategy_key: str) -> None:
+        """移除倉位（結算後）"""
+        key = (table_id, strategy_key)
+        self.active_positions.pop(key, None)
 
-        caps: List[float] = [requested]
-        if self.per_hand_cap is not None:
-            caps.append(self.per_hand_cap)
+    def get_position_count(self) -> int:
+        """獲取當前倉位數"""
+        return len(self.active_positions)
 
-        per_hand_limit = self.bankroll_total * self.per_hand_risk_pct
-        if per_hand_limit > 0:
-            caps.append(per_hand_limit)
+    def get_total_exposure(self) -> float:
+        """獲取當前總曝險（所有倉位金額總和）"""
+        return sum(self.active_positions.values())
 
-        table_limit = self.bankroll_total * self.per_table_risk_pct - self.table_exposure.get(table_id, 0.0)
-        caps.append(table_limit)
-        caps.append(self.bankroll_free)
-
-        amount = min(caps)
-        if amount < self.min_unit:
-            return CapitalReserveResult(False, 0.0, "below_min_unit")
-
-        self.bankroll_free -= amount
-        self.table_exposure[table_id] += amount
-        self.table_positions[table_id] += 1
-        return CapitalReserveResult(True, amount)
-
-    def release(self, table_id: str, amount: float) -> None:
-        amount = max(0.0, float(amount))
-        self.bankroll_free = min(self.bankroll_total, self.bankroll_free + amount)
-        self.table_exposure[table_id] = max(0.0, self.table_exposure.get(table_id, 0.0) - amount)
-        self.table_positions[table_id] = max(0, self.table_positions.get(table_id, 0) - 1)
-        if self.table_positions[table_id] == 0:
-            self.table_positions.pop(table_id, None)
-        if self.table_exposure[table_id] == 0:
-            self.table_exposure.pop(table_id, None)
-
-    def snapshot(self) -> Dict[str, float]:
+    def snapshot(self) -> Dict[str, Any]:
+        """獲取快照（UI 顯示用）"""
         return {
-            "bankroll_total": self.bankroll_total,
-            "bankroll_free": self.bankroll_free,
-            "exposure_total": self.bankroll_total - self.bankroll_free,
-            "table_exposure": dict(self.table_exposure),
-            "table_positions": dict(self.table_positions),
+            "position_count": self.get_position_count(),
+            "total_exposure": self.get_total_exposure(),
+            "positions": [
+                {"table_id": tid, "strategy_key": sk, "amount": amt}
+                for (tid, sk), amt in self.active_positions.items()
+            ]
         }
-
-    def restore(self, state: Dict[str, Any]) -> None:
-        total = state.get("bankroll_total")
-        if total is not None:
-            self.bankroll_total = float(total)
-        free = state.get("bankroll_free")
-        if free is not None:
-            self.bankroll_free = float(free)
-        exposures = state.get("table_exposure") or {}
-        self.table_exposure = defaultdict(float, {k: float(v) for k, v in exposures.items()})
-        positions = state.get("table_positions") or {}
-        self.table_positions = defaultdict(int, {k: int(v) for k, v in positions.items()})
 
 
 @dataclass
@@ -320,15 +307,19 @@ class LineOrchestrator:
     def __init__(
         self,
         *,
-        bankroll: float,
-        per_hand_risk_pct: float = 0.02,
-        per_table_risk_pct: float = 0.05,
-        per_hand_cap: Optional[float] = None,
-        max_concurrent_tables: int = 3,
-        min_unit: float = 1.0,
         fixed_priority: Optional[Dict[str, int]] = None,
         enable_ev_evaluation: bool = True,
     ) -> None:
+        """
+        初始化 LineOrchestrator
+
+        Args:
+            fixed_priority: 策略固定優先級（用於衝突解決）
+            enable_ev_evaluation: 是否啟用 EV 評估（用於衝突解決）
+
+        注意：不再需要 bankroll, per_hand_risk_pct 等參數
+              系統只追蹤 PnL，不做資金檢查
+        """
         self.strategies: Dict[str, StrategyDefinition] = {}
         self.signal_trackers: Dict[str, SignalTracker] = {}
         self.line_states: Dict[str, Dict[str, LineState]] = defaultdict(dict)
@@ -340,20 +331,23 @@ class LineOrchestrator:
         self._shared_progressions: Dict[str, LayerProgression] = {}
         self._pending: Dict[Tuple[str, str, str], PendingPosition] = {}
 
-        self.capital = CapitalPool(
-            bankroll=bankroll,
-            per_hand_risk_pct=per_hand_risk_pct,
-            per_table_risk_pct=per_table_risk_pct,
-            per_hand_cap=per_hand_cap,
-            max_concurrent_tables=max_concurrent_tables,
-            min_unit=min_unit,
-        )
+        # ✅ 倉位追蹤器（只用於 UI 顯示，不影響下注決策）
+        self.positions = PositionTracker()
+
+        # ✅ 風險協調器（追蹤 PnL 和止盈止損）
         self.risk = RiskCoordinator()
+
+        # ✅ 衝突解決器
         self.conflict_resolver = ConflictResolver(
             fixed_priority=fixed_priority,
             enable_ev_evaluation=enable_ev_evaluation,
         )
+
+        # ✅ 指標追蹤器
         self.metrics = MetricsTracker()
+        self.performance = PerformanceTracker()
+        self.conflict_history: List[ConflictRecord] = []
+        self.max_conflict_history: int = 100
 
     # ------------------------------------------------------------------
     def register_strategy(self, definition: StrategyDefinition, tables: Optional[Iterable[str]] = None) -> None:
@@ -380,15 +374,49 @@ class LineOrchestrator:
         phase: TablePhase,
         timestamp: float,
     ) -> List[BetDecision]:
+        # 開始追蹤階段轉換性能
+        phase_op_id = f"phase_{table_id}_{phase.value}_{time.time()}"
+        self.performance.start_operation(phase_op_id)
+
         self.table_phases[table_id] = phase
         if round_id:
             self.table_rounds[table_id] = round_id
 
         self.risk.refresh()
 
+        decisions = []
         if phase == TablePhase.BETTABLE and round_id:
-            return self._evaluate_entries(table_id, round_id, timestamp)
-        return []
+            # 開始追蹤決策生成性能
+            decision_op_id = f"decision_{table_id}_{round_id}"
+            self.performance.start_operation(decision_op_id)
+
+            decisions = self._evaluate_entries(table_id, round_id, timestamp)
+
+            # 結束決策生成追蹤
+            duration_ms = self.performance.end_operation(
+                decision_op_id,
+                PerformanceTracker.OP_DECISION_GENERATION,
+                success=True,
+                metadata={
+                    "table_id": table_id,
+                    "round_id": round_id,
+                    "decisions_count": len(decisions)
+                }
+            )
+
+        # 結束階段轉換追蹤
+        self.performance.end_operation(
+            phase_op_id,
+            PerformanceTracker.OP_PHASE_TRANSITION,
+            success=True,
+            metadata={
+                "table_id": table_id,
+                "phase": phase.value,
+                "decisions_generated": len(decisions)
+            }
+        )
+
+        return decisions
 
     # ------------------------------------------------------------------
     def handle_result(
@@ -439,9 +467,25 @@ class LineOrchestrator:
             pending_key = (table_id, round_id, strategy_key)
             position = self._pending.pop(pending_key, None)
             if not position:
+                # 結果到達但找不到對應的待處理倉位
+                # 可能原因：
+                # 1. 決策被資金池拒絕
+                # 2. 決策被衝突解決器拒絕
+                # 3. 決策執行失敗
+                # 4. round_id 不匹配
+                self._record_event(
+                    "WARNING",
+                    f"⚠️ 結果無匹配的待處理倉位: table={table_id} round={round_id} strategy={strategy_key}",
+                    {"table": table_id}
+                )
+
+                # 仍然記錄到 tracker，避免歷史數據遺漏
+                # （tracker.record 已在前面第421行執行，所以這裡只需 continue）
                 continue
 
-            self.capital.release(table_id, position.amount)
+            # ✅ 移除倉位追蹤（結算後）
+            self.positions.remove_position(table_id, strategy_key)
+
             line_state = self._ensure_line_state(table_id, strategy_key)
             progression = self._get_progression(table_id, strategy_key)
 
@@ -646,7 +690,30 @@ class LineOrchestrator:
             candidates.append(candidate)
 
         # 階段 2: 衝突解決
+        conflict_op_id = f"conflict_{table_id}_{round_id}"
+        self.performance.start_operation(conflict_op_id)
+
         resolution = self.conflict_resolver.resolve(candidates, self.strategies)
+
+        # 結束衝突解決追蹤
+        self.performance.end_operation(
+            conflict_op_id,
+            PerformanceTracker.OP_CONFLICT_RESOLUTION,
+            success=True,
+            metadata={
+                "table_id": table_id,
+                "round_id": round_id,
+                "candidates_count": len(candidates),
+                "approved_count": len(resolution.approved),
+                "rejected_count": len(resolution.rejected)
+            }
+        )
+
+        # 記錄衝突解決過程（用於 UI 顯示）
+        if len(candidates) > 1:  # 只記錄有多個候選決策的情況
+            self._record_conflict_resolution(
+                table_id, round_id, candidates, resolution, timestamp
+            )
 
         # 記錄被拒絕的決策
         for rejected_decision, reason, message in resolution.rejected:
@@ -665,35 +732,15 @@ class LineOrchestrator:
             line_state.phase = LinePhase.IDLE
             line_state.armed_count = 0
 
-        # 階段 3: 預留資金並生成最終決策
+        # 階段 3: 生成最終決策（不再檢查資金）
         final_decisions: List[BetDecision] = []
 
         for approved in resolution.approved:
-            # 預留資金
-            active_tables_count = len(self.capital.table_positions)
-            self._record_event(
-                "DEBUG",
-                f"資金池狀態: table_positions={list(self.capital.table_positions.keys())}, active_tables={active_tables_count}, max={self.capital.max_concurrent_tables}",
-                {"table": table_id},
-            )
-            reserve = self.capital.reserve(
-                table_id,
-                approved.amount,
-                active_tables=active_tables_count
-            )
-            if not reserve.ok:
-                self._record_event(
-                    "WARNING",
-                    f"Line {approved.strategy_key} skip: {reserve.reason}",
-                    {"table": table_id, "round": round_id},
-                )
-                # 重置狀態
-                line_state = self._ensure_line_state(table_id, approved.strategy_key)
-                line_state.phase = LinePhase.IDLE
-                line_state.armed_count = 0
-                continue
+            # ✅ 直接使用批准的金額，不做資金檢查
+            actual_amount = approved.amount
 
-            actual_amount = reserve.amount
+            # 追蹤倉位（僅用於 UI 顯示）
+            self.positions.add_position(table_id, approved.strategy_key, actual_amount)
 
             # 創建最終決策
             decision = BetDecision(
@@ -880,6 +927,60 @@ class LineOrchestrator:
         self._events.clear()
         return events
 
+    def _record_conflict_resolution(
+        self,
+        table_id: str,
+        round_id: str,
+        candidates: List[PendingDecision],
+        resolution: ConflictResolution,
+        timestamp: float
+    ) -> None:
+        """記錄衝突解決過程（用於 UI 顯示）"""
+        # 轉換候選決策為字典格式
+        candidates_data = [
+            {
+                "strategy_key": c.strategy_key,
+                "direction": c.direction.value,
+                "amount": c.amount,
+                "layer_index": c.layer_index,
+                "ev_score": c.ev_score,
+                "priority_score": c.priority_score,
+            }
+            for c in candidates
+        ]
+
+        # 轉換拒絕的決策（包含原因）
+        rejections_data = [
+            {
+                "strategy_key": decision.strategy_key,
+                "direction": decision.direction.value,
+                "amount": decision.amount,
+                "layer_index": decision.layer_index,
+                "reason": reason.value,
+                "reason_detail": detail,
+            }
+            for decision, reason, detail in resolution.rejected
+        ]
+
+        # 創建衝突記錄
+        conflict_record = ConflictRecord(
+            table_id=table_id,
+            round_id=round_id,
+            timestamp=timestamp,
+            candidates_count=len(candidates),
+            approved_count=len(resolution.approved),
+            rejected_count=len(resolution.rejected),
+            candidates=candidates_data,
+            rejections=rejections_data,
+        )
+
+        # 添加到歷史記錄
+        self.conflict_history.append(conflict_record)
+
+        # 維護歷史記錄大小限制
+        if len(self.conflict_history) > self.max_conflict_history:
+            self.conflict_history = self.conflict_history[-self.max_conflict_history:]
+
     def _record_event(self, level: str, message: str, metadata: Optional[Dict[str, str]] = None) -> None:
         self._events.append(OrchestratorEvent(level=level, message=message, metadata=metadata or {}))
 
@@ -901,8 +1002,10 @@ class LineOrchestrator:
                 )
         return {
             "lines": lines_snapshot,
-            "capital": self.capital.snapshot(),
-            "risk": self.risk.snapshot(),
+            "positions": self.positions.snapshot(),  # ✅ 倉位追蹤（僅UI顯示）
+            "risk": self.risk.snapshot(),            # ✅ 風控追蹤（PnL + 止盈止損）
+            "performance": self.performance.get_summary(),
+            "conflicts": [record.to_dict() for record in self.conflict_history],
         }
 
     def restore_state(self, state: Dict[str, Any]) -> None:
@@ -955,9 +1058,7 @@ class LineOrchestrator:
             if progression:
                 progression.index = max_layer
 
-        capital_state = state.get("capital")
-        if isinstance(capital_state, dict):
-            self.capital.restore(capital_state)
+        # ❌ capital_state 已移除（不再使用資金池）
 
         risk_state = state.get("risk")
         if isinstance(risk_state, dict):

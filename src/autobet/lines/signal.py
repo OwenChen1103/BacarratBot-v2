@@ -60,8 +60,9 @@ class SignalTracker:
 
     def _get_recent_winners(self, table_id: str, length: int) -> List[str]:
         dq = self.history.get(table_id)
-        if not dq or len(dq) < length:
+        if not dq:
             return []
+        # 返回最近 length 筆記錄，如果不足則返回全部
         return [winner for winner, _ in list(dq)[-length:]]
 
     def _pattern_start_time(self, table_id: str, length: int) -> Optional[float]:

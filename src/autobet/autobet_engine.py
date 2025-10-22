@@ -1,12 +1,27 @@
 # src/autobet/autobet_engine.py
+"""
+AutoBetEngine - 執行層協調器
+
+職責範圍：
+1. 檢測器生命週期管理 (OverlayDetector, BeadPlateResultDetector)
+2. 狀態機協調 (_tick)
+3. 執行層接口 (Actuator)
+4. 測試工具 (trigger_if_open, force_execute_sequence)
+
+已廢棄功能（由 LineOrchestrator 接管）：
+- ❌ 策略決策 (_do_betting_cycle) - 已刪除
+- ❌ 資金管理 (已移至 CapitalPool)
+- ❌ 盈虧計算 (已移至 LineOrchestrator)
+- ❌ 風控檢查 (已移至 LineOrchestrator.risk)
+
+注意：本模組不應再擴展策略相關功能
+"""
 import os, csv, json, time, logging, threading
 from typing import Dict, Optional, List, Tuple
 from .detectors import OverlayDetectorWrapper as OverlayDetector, ProductionOverlayDetector
-from .planner import build_click_plan
 from .chip_planner import SmartChipPlanner, BettingPolicy
 from .chip_profile_manager import ChipProfile
 from .actuator import Actuator
-from .risk import IdempotencyGuard, check_limits
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +32,7 @@ class AutoBetEngine:
         self.enabled = False
         self.ui: Dict = {}
         self.pos: Dict = {}
-        self.strategy: Dict = {}
+        # ❌ self.strategy 已廢棄 - 策略由 LineOrchestrator 管理
         self.overlay: Optional[OverlayDetector] = None
         self.act: Optional[Actuator] = None
         self.chip_profile = chip_profile
@@ -27,9 +42,8 @@ class AutoBetEngine:
         self.state = "idle"
         self.last_winner = None
         self.rounds = 0
-        self.net = 0
-        self.step_idx = 0  # for martingale
-        self.guard = IdempotencyGuard()
+        self.net = 0  # ❌ 已廢棄 - 盈虧由 LineOrchestrator 計算
+        # ❌ self.step_idx, self.guard 已廢棄 - Martingale 由 LineOrchestrator 處理
         self.current_plan = None
         self.session_ctx = {"last_result_ready": False}
         self._exec_lock = threading.Lock()  # 防止併發執行
@@ -54,14 +68,8 @@ class AutoBetEngine:
             logger.error(f"load_positions: {e}")
             return False
 
-    def load_strategy(self, path: str) -> bool:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                self.strategy = json.load(f)
-            return True
-        except Exception as e:
-            logger.error(f"load_strategy: {e}")
-            return False
+    # ❌ load_strategy() 已刪除 - 策略配置由 LineOrchestrator 管理
+    # 參考: src/autobet/lines/config.py -> load_strategy_definitions()
 
     def set_log_callback(self, callback):
         """設置日誌回調函數"""
@@ -283,7 +291,12 @@ class AutoBetEngine:
                 # 簡單檢查：只執行點擊順序，不管複雜狀態
                 click_sequence = self.pos.get("click_sequence", [])
                 if not click_sequence:
-                    logger.warning("沒有找到點擊順序配置")
+                    logger.warning(
+                        "沒有找到點擊順序配置 (click_sequence)。"
+                        "此功能僅用於手動測試點擊位置，實際下注請使用 LineOrchestrator 系統。"
+                        "如需配置測試序列，請在 configs/positions.json 中添加 'click_sequence' 欄位，"
+                        "例如: \"click_sequence\": [\"chip_1k\", \"banker\", \"confirm\"]"
+                    )
                     return False
 
                 logger.info(f"觸發執行點擊順序: {click_sequence}")
@@ -359,56 +372,15 @@ class AutoBetEngine:
         }
         return chip_mapping.get(chip_action, 0)
 
-    def _do_betting_cycle(self):
-        self.state = "betting_open"
-        unit = int(self.strategy.get("unit", 1000))
-        targets = self.strategy.get("targets", ["banker"])
-        split = self.strategy.get("split_units", {"banker":1})
-        targets_units = {t: int(split.get(t,1)) for t in targets}
-
-        # 優先使用 SmartChipPlanner
-        if self.smart_planner:
-            logger.info("使用 SmartChipPlanner 生成計畫")
-            plan = self._build_plan_with_smart_planner(unit, targets_units)
-        else:
-            logger.warning("SmartChipPlanner 未初始化，使用舊系統")
-            plan = build_click_plan(unit, targets_units)
-
-        plan_repr = json.dumps(plan, ensure_ascii=False)
-        round_id = f"NOID-{int(time.time())}"  # 若外部未給，送單冪等仍可用
-
-        # 風控：計算此輪金額
-        per_round_amount = unit * sum(targets_units.values())
-        ok, reason = check_limits(self.strategy.get("limits", {}), per_round_amount, self.net)
-        if not ok:
-            logger.warning(f"risk blocked: {reason}")
-            self.state = "paused"
-            return
-
-        # 冪等鎖
-        if not self.guard.accept(round_id, plan_repr):
-            logger.info("idempotent reject (same plan in same round)")
-            self.state = "waiting_round"
-            return
-
-        # 點 chips + 下注點，不送 confirm（乾跑驗收階段）
-        self.state = "placing_bets"
-        for kind, val in plan:
-            if kind == "chip":
-                self.act.click_chip_value(int(val))
-            elif kind == "bet":
-                self.act.click_bet(val)
-
-        # 乾跑：不按確認；實戰才送單且最後再檢查 overlay
-        if not self.dry:
-            if self.overlay.overlay_is_open():
-                self.act.confirm()
-            else:
-                if self.ui.get("safety", {}).get("cancel_on_close", True):
-                    self.act.cancel()
-                    logger.warning("overlay closed before confirm -> cancel()")
-
-        self.state = "in_round"
+    # ❌ _do_betting_cycle() 已刪除（約50行）
+    # 舊版策略決策系統，已完全由 LineOrchestrator 接管
+    # 相關功能：
+    # - 策略決策 → LineOrchestrator._evaluate_entries()
+    # - 資金管理 → CapitalPool
+    # - 風控檢查 → RiskLevelConfig
+    # - 冪等保護 → ConflictResolver
+    #
+    # 如需下注執行，請使用 EngineWorker._dispatch_line_order()
 
     def _handle_result(self, evt: Dict):
         """處理遊戲結果事件"""
@@ -440,18 +412,15 @@ class AutoBetEngine:
             self.state = "error"
 
     def _apply_result_and_staking(self, evt: Dict):
-        """處理結果後重置狀態（舊版策略邏輯已廢棄）
+        """處理結果後重置狀態
 
-        注意：Martingale 和盈虧計算現由 LineOrchestrator 處理
-        這裡只做基本的狀態重置
+        注意：此方法僅做狀態重置，盈虧計算由 LineOrchestrator 處理
         """
         try:
             # 重置結果標記
             self.session_ctx["last_result_ready"] = False
             self.current_plan = None
-
-            logger.debug(f"Applied result for round {self.rounds} (盈虧計算由 LineOrchestrator 處理)")
-
+            logger.debug(f"Result state reset for round {self.rounds}")
         except Exception as e:
             logger.error(f"Apply result failed: {e}", exc_info=True)
 

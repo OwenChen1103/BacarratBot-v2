@@ -3,7 +3,11 @@
     "allow": [
       "Bash(Stop-Process -Force)",
       "Bash(wmic process where \"name=''python.exe'' and commandline like ''%run_gui%''\" delete)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(chcp 65001)",
+      "Bash(powershell -Command \"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; cd 'c:\\Users\\owen9\\OneDrive\\Desktop\\Bagarrat\\BacarratBot-v2'; python test_phase_flow.py\":*)",
+      "Bash(find:*)",
+      "Bash(powershell -Command:*)"
     ],
     "deny": [],
     "ask": []

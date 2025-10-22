@@ -15,7 +15,8 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QTextCursor, QColor, QPalette
 
 from ..workers.engine_worker import EngineWorker
-from ..components.next_bet_card import NextBetCard
+# from ..components.next_bet_card import NextBetCard  # 舊版，已被精簡卡片取代
+from ..components import CompactStrategyInfoCard, CompactLiveCard
 
 # 桌號映射: canonical_id -> display_name (僅供 UI 顯示)
 TABLE_ID_DISPLAY_MAP = {
@@ -1188,7 +1189,7 @@ class DashboardPage(QWidget):
         self.setup_direct_detection()
 
     def create_strategy_status_indicator(self):
-        """創建策略運行狀態指示器"""
+        """創建策略運行狀態指示器（已廢棄 - 使用 CompactStrategyInfoCard）"""
         frame = QFrame()
         frame.setFrameStyle(QFrame.StyledPanel)
         frame.setStyleSheet("""
@@ -1229,7 +1230,7 @@ class DashboardPage(QWidget):
         return frame
 
     def update_strategy_status_display(self, summary):
-        """更新策略狀態顯示"""
+        """更新策略狀態顯示（已廢棄 - 使用 CompactStrategyInfoCard.update_stats）"""
         if not summary:
             self.strategy_status_label.setText("⚪ 策略系統未啟動")
             self.strategy_status_label.setStyleSheet("""
@@ -1325,8 +1326,10 @@ class DashboardPage(QWidget):
         right_layout.setSpacing(12)
 
         # 創建組件
-        self.strategy_status_card = self.create_strategy_status_indicator()
-        self.next_bet_card = NextBetCard()
+        # self.strategy_status_card = self.create_strategy_status_indicator()  # 舊版
+        # self.next_bet_card = NextBetCard()  # 舊版
+        self.compact_strategy_card = CompactStrategyInfoCard()  # ✅ 新版精簡卡片
+        self.compact_live_card = CompactLiveCard()  # ✅ 新版即時狀態卡片
         # self.click_sequence_card = ClickSequenceCard()  # 已過時：SmartChipPlanner 自動生成計畫
 
         # 標籤頁（策略狀態 | 即將下注）
@@ -1356,18 +1359,18 @@ class DashboardPage(QWidget):
             }
         """)
 
-        # Tab 1: 策略狀態
+        # Tab 1: 策略資訊（新版精簡）
         tab1 = QWidget()
         tab1_layout = QVBoxLayout(tab1)
         tab1_layout.setContentsMargins(8, 8, 8, 8)
-        tab1_layout.addWidget(self.strategy_status_card)
+        tab1_layout.addWidget(self.compact_strategy_card)
         tab1_layout.addStretch()
 
-        # Tab 2: 即將下注
+        # Tab 2: 即時狀態（新版動態顯示）
         tab2 = QWidget()
         tab2_layout = QVBoxLayout(tab2)
         tab2_layout.setContentsMargins(8, 8, 8, 8)
-        tab2_layout.addWidget(self.next_bet_card)
+        tab2_layout.addWidget(self.compact_live_card)
         tab2_layout.addStretch()
 
         # Tab 3: 開獎結果
@@ -1377,8 +1380,8 @@ class DashboardPage(QWidget):
         self.results_history_card = ResultsHistoryCard()
         tab3_layout.addWidget(self.results_history_card)
 
-        tabs.addTab(tab1, "🎯 策略狀態")
-        tabs.addTab(tab2, "📌 即將下注")
+        tabs.addTab(tab1, "📊 策略資訊")
+        tabs.addTab(tab2, "🎮 即時狀態")
         tabs.addTab(tab3, "🎲 開獎結果")
 
         right_layout.addWidget(tabs, 1)  # 給予彈性空間
@@ -1571,8 +1574,9 @@ class DashboardPage(QWidget):
             self.detection_card.update_content("檢測中", "#f59e0b", False)
             self.start_time = self.get_current_time()
 
-            # 更新NextBetCard狀態為運行中
-            self.next_bet_card.set_engine_running(True)
+            # ✅ 更新新版卡片狀態為運行中
+            if hasattr(self, 'compact_strategy_card'):
+                self.compact_strategy_card.set_status(True)
 
             # 啟動運行時間計時器
             self.runtime_timer = QTimer()
@@ -1625,8 +1629,9 @@ class DashboardPage(QWidget):
             self.detection_card.update_content("檢測中", "#f59e0b", False)
             self.start_time = self.get_current_time()
 
-            # 更新NextBetCard狀態為運行中
-            self.next_bet_card.set_engine_running(True)
+            # ✅ 更新新版卡片狀態為運行中
+            if hasattr(self, 'compact_strategy_card'):
+                self.compact_strategy_card.set_status(True)
 
             # 啟動運行時間計時器
             self.runtime_timer = QTimer()
@@ -1685,8 +1690,9 @@ class DashboardPage(QWidget):
         if self.engine_worker:
             self.engine_worker.stop_engine()
 
-        # 更新NextBetCard狀態為等待啟動
-        self.next_bet_card.set_engine_running(False)
+        # ✅ 更新新版卡片狀態為等待啟動
+        if hasattr(self, 'compact_strategy_card'):
+            self.compact_strategy_card.set_status(False)
 
         # 重置按鈕狀態
         self.simulate_btn.setEnabled(True)
@@ -1796,15 +1802,9 @@ class DashboardPage(QWidget):
             }
             direction_display = direction_map.get(direction.lower(), direction)
 
-            # 更新 NextBetCard
-            self.next_bet_card.update_next_bet(
-                table=table_id,
-                strategy=strategy,
-                current_layer=layer.split('/')[0] if '/' in str(layer) else layer,
-                direction=direction_display,
-                amount=amount,
-                recipe=recipe
-            )
+            # ✅ 舊版 NextBetCard 已被精簡卡片取代
+            # 新版卡片會從 on_engine_status() 的 snapshot 自動更新
+            # self.next_bet_card.update_next_bet(...)
 
         except Exception as e:
             self.log_viewer.add_log("ERROR", "Dashboard", f"更新下注卡片失敗: {e}")
@@ -1865,8 +1865,27 @@ class DashboardPage(QWidget):
             summary = {}
         self.line_summary = summary
 
-        # 更新策略狀態指示器
-        self.update_strategy_status_display(summary)
+        # ✅ 舊版策略狀態指示器已移除，新版精簡卡片會自動更新
+        # self.update_strategy_status_display(summary)
+
+        # ✅ 更新新版精簡卡片
+        try:
+            # 更新策略資訊卡片的統計數據
+            if hasattr(self, 'compact_strategy_card'):
+                self.compact_strategy_card.update_stats(summary)
+
+            # 更新即時狀態卡片
+            if hasattr(self, 'compact_live_card'):
+                self.compact_live_card.update_from_snapshot(summary, table_id="main")
+
+                # 如果有新結果，添加到路單歷史
+                if latest and "main" in latest:
+                    info = latest.get("main")
+                    if info and info.get("winner"):
+                        winner = info.get("winner")
+                        self.compact_live_card.add_history(winner)
+        except Exception as e:
+            self.log_viewer.add_log("WARNING", "Dashboard", f"更新精簡卡片失敗: {e}")
 
     def on_result_table_selected(self, table_id: str):
         """單桌模式：不再需要此方法"""

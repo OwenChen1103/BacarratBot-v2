@@ -9,7 +9,12 @@
       "Bash(find:*)",
       "Bash(powershell -Command:*)",
       "Bash(tree:*)",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "Bash(dir /s /b *.py)",
+      "Bash(findstr:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

@@ -9,8 +9,7 @@ import numpy as np
 from src.autobet.autobet_engine import AutoBetEngine
 from src.autobet.chip_profile_manager import ChipProfileManager
 from src.autobet.detectors import BeadPlateResultDetector
-from src.autobet.phase_detector import PhaseDetector
-from src.autobet.round_manager import RoundManager, RoundPhase
+from src.autobet.game_state_manager import GameStateManager, GamePhase
 from src.autobet.lines import (
     LineOrchestrator,
     TablePhase,
@@ -147,11 +146,8 @@ class EngineWorker(QThread):
         self._detection_timer: Optional[QTimer] = None
         self._detection_enabled = False
 
-        # PhaseDetector 相關狀態（已棄用，改用 RoundManager）
-        self._phase_detector: Optional[PhaseDetector] = None
-
-        # RoundManager - 統一管理局號和階段轉換
-        self._round_manager: Optional[RoundManager] = None
+        # GameStateManager - 統一管理局號和階段轉換（合併 PhaseDetector + RoundManager）
+        self._game_state: Optional[GameStateManager] = None
 
         self._latest_results: Dict[str, Dict[str, Any]] = {}
         self._line_orchestrator: Optional[LineOrchestrator] = None
@@ -894,66 +890,26 @@ class EngineWorker(QThread):
     # ------------------------------------------------------------------
 
     def _setup_phase_detector(self) -> None:
-        """初始化 RoundManager（統一的局號和階段管理器）"""
+        """初始化 GameStateManager（統一的遊戲狀態管理器）"""
         try:
-            # 創建 RoundManager 實例
-            self._round_manager = RoundManager(parent=self)
+            # 創建 GameStateManager 實例
+            self._game_state = GameStateManager(parent=self)
 
-            # 連接 RoundManager 信號
-            self._round_manager.phase_changed.connect(self._on_phase_changed)
-            self._round_manager.result_confirmed.connect(self._on_result_confirmed)
+            # 連接 GameStateManager 信號
+            self._game_state.phase_changed.connect(self._on_phase_changed)
+            self._game_state.result_confirmed.connect(self._on_result_confirmed)
 
-            self._emit_log("INFO", "RoundManager", "✅ RoundManager 初始化完成")
-
-            # 保留舊的 PhaseDetector（用於時間控制）
-            self._phase_detector = PhaseDetector(parent=self)
-            # 連接 PhaseDetector 信號，但會被攔截並由 RoundManager 處理
-            self._phase_detector.phase_changed.connect(self._on_phase_detector_signal)
+            self._emit_log("INFO", "GameStateManager", "✅ GameStateManager 初始化完成")
 
         except Exception as e:
-            self._emit_log("ERROR", "RoundManager", f"初始化失敗: {e}")
-            self._round_manager = None
-            self._phase_detector = None
-
-    def _on_phase_detector_signal(self, table_id: str, round_id: str, phase: str, timestamp: float) -> None:
-        """
-        攔截 PhaseDetector 的信號，使用 RoundManager 重新路由
-
-        PhaseDetector 會生成帶 _next 的 round_id，但我們需要使用 RoundManager 的統一 round_id
-        """
-        if not self._round_manager:
-            # 如果沒有 RoundManager，直接傳遞信號
-            self._on_phase_changed(table_id, round_id, phase, timestamp)
-            return
-
-        try:
-            # 根據階段類型，讓 RoundManager 執行階段轉換
-            if phase == "bettable":
-                actual_round_id = self._round_manager.transition_to_bettable(table_id)
-                if actual_round_id:
-                    # RoundManager 會發送 phase_changed 信號，無需手動調用 _on_phase_changed
-                    pass
-                else:
-                    self._emit_log("WARNING", "RoundManager", f"無法轉換到 BETTABLE")
-
-            elif phase == "locked":
-                actual_round_id = self._round_manager.transition_to_locked(table_id)
-                if actual_round_id:
-                    # RoundManager 會發送 phase_changed 信號
-                    pass
-                else:
-                    self._emit_log("WARNING", "RoundManager", f"無法轉換到 LOCKED")
-
-        except Exception as e:
-            self._emit_log("ERROR", "RoundManager", f"階段轉換錯誤: {e}")
-            # 發生錯誤時，使用原始信號
-            self._on_phase_changed(table_id, round_id, phase, timestamp)
+            self._emit_log("ERROR", "GameStateManager", f"初始化失敗: {e}")
+            self._game_state = None
 
     def _on_result_confirmed(self, table_id: str, round_id: str, winner: str, timestamp: float) -> None:
         """
-        處理 RoundManager 發送的結果確認信號
+        處理 GameStateManager 發送的結果確認信號
 
-        這個信號在 RoundManager.on_result_detected() 時發送
+        這個信號在 GameStateManager.on_result_detected() 時發送
 
         Args:
             table_id: 桌號
@@ -966,7 +922,7 @@ class EngineWorker(QThread):
 
     def _on_phase_changed(self, table_id: str, round_id: str, phase: str, timestamp: float) -> None:
         """
-        處理 PhaseDetector 發送的階段變化事件
+        處理 GameStateManager 發送的階段變化事件
 
         Args:
             table_id: 桌號
@@ -982,10 +938,10 @@ class EngineWorker(QThread):
             try:
                 table_phase = TablePhase(phase)
             except ValueError:
-                self._emit_log("WARNING", "PhaseDetector", f"未知的階段: {phase}")
+                self._emit_log("WARNING", "GameStateManager", f"未知的階段: {phase}")
                 return
 
-            self._emit_log("DEBUG", "PhaseDetector",
+            self._emit_log("DEBUG", "GameStateManager",
                           f"階段變化: table={table_id} round={round_id} phase={phase}")
 
             # 通知 LineOrchestrator 階段變化，並接收決策
@@ -995,7 +951,7 @@ class EngineWorker(QThread):
 
             # 如果有決策產生，執行下注
             if decisions:
-                self._emit_log("INFO", "PhaseDetector",
+                self._emit_log("INFO", "GameStateManager",
                               f"✅ 階段 {phase} 觸發 {len(decisions)} 個下注決策")
                 self._handle_line_decisions(decisions)
 
@@ -1005,9 +961,9 @@ class EngineWorker(QThread):
             self._flush_line_events()
 
         except Exception as e:
-            self._emit_log("ERROR", "PhaseDetector", f"處理階段變化錯誤: {e}")
+            self._emit_log("ERROR", "GameStateManager", f"處理階段變化錯誤: {e}")
             import traceback
-            self._emit_log("ERROR", "PhaseDetector", traceback.format_exc())
+            self._emit_log("ERROR", "GameStateManager", traceback.format_exc())
 
     # ------------------------------------------------------------------
     # ResultDetector 相關方法
@@ -1185,9 +1141,9 @@ class EngineWorker(QThread):
                 winner_text = winner_map.get(result.winner, result.winner)
                 table_id = self._selected_table or "main"
 
-                # 使用 RoundManager 生成統一的 round_id
-                if self._round_manager:
-                    round_id = self._round_manager.on_result_detected(
+                # 使用 GameStateManager 生成統一的 round_id 並啟動階段轉換
+                if self._game_state:
+                    round_id = self._game_state.on_result_detected(
                         table_id, result.winner, result.detected_at
                     )
                     self._emit_log(
@@ -1195,18 +1151,13 @@ class EngineWorker(QThread):
                         "ResultDetector",
                         f"✅ 檢測到結果: {winner_text} (信心: {result.confidence:.3f}) | 局號: {round_id}"
                     )
-
-                    # 啟動階段轉換定時器（SETTLING → BETTABLE → LOCKED）
-                    if self._phase_detector:
-                        # 使用舊的 PhaseDetector 來控制時間，但 round_id 由 RoundManager 管理
-                        self._phase_detector.on_result_detected(table_id, round_id, result.winner)
                 else:
-                    # 如果 RoundManager 未初始化，使用舊方式（向後兼容）
+                    # 如果 GameStateManager 未初始化，使用舊方式（向後兼容）
                     round_id = f"detect-{int(result.detected_at * 1000)}"
                     self._emit_log(
                         "WARNING",
-                        "RoundManager",
-                        "RoundManager 未初始化，使用舊方式生成 round_id"
+                        "GameStateManager",
+                        "GameStateManager 未初始化，使用舊方式生成 round_id"
                     )
 
                 # 產生事件
@@ -1459,10 +1410,10 @@ class EngineWorker(QThread):
                         else:
                             self._emit_log("INFO", "Line", f"✅ 訂單執行完成: {decision.strategy_key}")
 
-                        # 🔥 標記 RoundManager：這一局有下注（用於排除歷史）
-                        if self._round_manager:
-                            self._round_manager.mark_bet_placed(decision.table_id, decision.round_id)
-                            self._emit_log("DEBUG", "RoundManager",
+                        # 🔥 標記 GameStateManager：這一局有下注（用於排除歷史）
+                        if self._game_state:
+                            self._game_state.mark_bet_placed(decision.table_id, decision.round_id)
+                            self._emit_log("DEBUG", "GameStateManager",
                                          f"✅ 已標記下注: round={decision.round_id}")
 
                         # 🔥 發送「下注已執行」信號

@@ -5,12 +5,12 @@ P0 Emergency Fixes Integration Test
 驗證以下修復是否正常工作：
 1. ✅ 移除過時的 net profit 追蹤（AutoBetEngine.net）
 2. ✅ 修復參與局排除邏輯（handle_result 先檢查 _pending）
-3. ✅ 統一 round_id 生成（RoundManager）
+3. ✅ 統一 round_id 生成（GameStateManager）
 
 測試場景：
 - 觀察局：無下注 → 應記錄到歷史
 - 參與局：有下注 → 不應記錄到歷史，直接結算
-- round_id 一致性：PhaseDetector 和 ResultDetector 使用相同的 ID
+- round_id 一致性：GameStateManager 統一生成和管理 round_id
 """
 import sys
 import time
@@ -21,8 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from autobet.autobet_engine import AutoBetEngine
-from autobet.round_manager import RoundManager, RoundPhase
-from autobet.phase_detector import PhaseDetector
+from autobet.game_state_manager import GameStateManager, GamePhase
 from autobet.lines.orchestrator import LineOrchestrator
 from autobet.lines.config import load_strategy_definitions
 
@@ -59,19 +58,19 @@ def test_deprecated_net_removal():
 
 
 def test_round_manager_unified_ids():
-    """測試 2: 驗證 RoundManager 統一生成 round_id"""
+    """測試 2: 驗證 GameStateManager 統一生成 round_id"""
     logger.info("=" * 60)
-    logger.info("測試 2: 驗證 RoundManager 統一 round_id 生成")
+    logger.info("測試 2: 驗證 GameStateManager 統一 round_id 生成")
     logger.info("=" * 60)
 
-    round_manager = RoundManager()
+    game_state = GameStateManager()
 
     # 模擬結果檢測
     table_id = "table1"
     winner = "B"
     detected_at = time.time()
 
-    round_id = round_manager.on_result_detected(table_id, winner, detected_at)
+    round_id = game_state.on_result_detected(table_id, winner, detected_at)
 
     # 驗證 round_id 格式
     expected_prefix = f"round-{table_id}-"
@@ -85,7 +84,7 @@ def test_round_manager_unified_ids():
         return False
 
     # 驗證當前局信息
-    current_round = round_manager.get_current_round(table_id)
+    current_round = game_state.get_current_round(table_id)
     if not current_round:
         logger.error("❌ FAILED: 無法獲取當前局")
         return False
@@ -98,24 +97,24 @@ def test_round_manager_unified_ids():
         logger.error(f"❌ FAILED: 贏家不一致: {current_round.result_winner} vs {winner}")
         return False
 
-    logger.info(f"✅ PASSED: RoundManager 統一生成 round_id: {round_id}")
+    logger.info(f"✅ PASSED: GameStateManager 統一生成 round_id: {round_id}")
     return True
 
 
 def test_round_manager_participation_tracking():
-    """測試 3: 驗證 RoundManager 參與狀態追蹤"""
+    """測試 3: 驗證 GameStateManager 參與狀態追蹤"""
     logger.info("=" * 60)
     logger.info("測試 3: 驗證參與狀態追蹤")
     logger.info("=" * 60)
 
-    round_manager = RoundManager()
+    game_state = GameStateManager()
 
     table_id = "table1"
     detected_at = time.time()
 
     # 創建第一局（觀察局）
-    round_id_1 = round_manager.on_result_detected(table_id, "B", detected_at)
-    current_1 = round_manager.get_current_round(table_id)
+    round_id_1 = game_state.on_result_detected(table_id, "B", detected_at)
+    current_1 = game_state.get_current_round(table_id)
 
     if current_1.is_participated:
         logger.error("❌ FAILED: 新局應該是未參與狀態")
@@ -123,11 +122,10 @@ def test_round_manager_participation_tracking():
 
     logger.info(f"✅ 新局 {round_id_1} 初始狀態: is_participated=False")
 
-    # 轉換到 BETTABLE 並標記下注
-    round_manager.transition_to_bettable(table_id)
-    round_manager.mark_bet_placed(table_id, round_id_1)
+    # 標記下注
+    game_state.mark_bet_placed(table_id, round_id_1)
 
-    current_1_updated = round_manager.get_current_round(table_id)
+    current_1_updated = game_state.get_current_round(table_id)
     if not current_1_updated.is_participated:
         logger.error("❌ FAILED: 標記下注後應該是參與狀態")
         return False
@@ -135,8 +133,8 @@ def test_round_manager_participation_tracking():
     logger.info(f"✅ 標記下注後: is_participated=True")
 
     # 創建第二局（不下注的觀察局）
-    round_id_2 = round_manager.on_result_detected(table_id, "P", detected_at + 20)
-    current_2 = round_manager.get_current_round(table_id)
+    round_id_2 = game_state.on_result_detected(table_id, "P", detected_at + 20)
+    current_2 = game_state.get_current_round(table_id)
 
     if current_2.is_participated:
         logger.error("❌ FAILED: 新觀察局應該是未參與狀態")
@@ -145,8 +143,8 @@ def test_round_manager_participation_tracking():
     logger.info(f"✅ 新觀察局 {round_id_2} 狀態: is_participated=False")
 
     # 驗證 should_include_in_history
-    should_include_1 = round_manager.should_include_in_history(table_id, round_id_1)
-    should_include_2 = round_manager.should_include_in_history(table_id, round_id_2)
+    should_include_1 = game_state.should_include_in_history(table_id, round_id_1)
+    should_include_2 = game_state.should_include_in_history(table_id, round_id_2)
 
     if should_include_1:
         logger.error(f"❌ FAILED: 參與局 {round_id_1} 不應計入歷史")

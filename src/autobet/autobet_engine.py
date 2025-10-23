@@ -42,7 +42,7 @@ class AutoBetEngine:
         self.state = "idle"
         self.last_winner = None
         self.rounds = 0
-        self.net = 0  # ❌ 已廢棄 - 盈虧由 LineOrchestrator 計算
+        # ❌ self.net 已移除 - 盈虧由 LineOrchestrator 計算
         # ❌ self.step_idx, self.guard 已廢棄 - Martingale 由 LineOrchestrator 處理
         self.current_plan = None
         self.session_ctx = {"last_result_ready": False}
@@ -54,7 +54,7 @@ class AutoBetEngine:
         self.csv_path = f"data/sessions/session-{ts}.csv"
         self.ndjson_path = "data/sessions/events.out.ndjson"
         with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(["ts","state","round_id","winner","plan","amount","net"])
+            csv.writer(f).writerow(["ts","state","round_id","winner","plan","amount"])
 
     def load_ui_config(self, ui: Dict):
         self.ui = ui or {}
@@ -399,7 +399,7 @@ class AutoBetEngine:
                 self._apply_result_and_staking(evt)
 
             # 寫會話記錄
-            row = [int(time.time()*1000), self.state, evt.get("round_id"), self.last_winner, "-", "-", self.net]
+            row = [int(time.time()*1000), self.state, evt.get("round_id"), self.last_winner, "-", "-"]
             with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(row)
             with open(self.ndjson_path, "a", encoding="utf-8") as f:
@@ -430,7 +430,6 @@ class AutoBetEngine:
             "dry_run": self.dry,
             "current_state": self.state,
             "rounds": self.rounds,
-            "net": self.net,
             "last_winner": self.last_winner
         }
 

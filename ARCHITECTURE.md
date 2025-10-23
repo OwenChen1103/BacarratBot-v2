@@ -189,6 +189,132 @@
    - ✅ 記錄組件職責（本文件）
    - 記錄數據流
 
+## P0 緊急修復（已完成）
+
+> **完成日期**: 2025-10-24
+> **測試驗證**: test_p0_fixes.py 全部通過 ✅
+
+### 1. ✅ 移除過時的 net profit 追蹤
+
+**問題**: `AutoBetEngine.net` 與 `LineOrchestrator` 的 PnL 計算重複，造成混淆。
+
+**修復**:
+- 移除 `AutoBetEngine.net` 屬性
+- 移除 `get_status()` 中的 `net` 字段
+- 更新 CSV 日誌格式（移除 net 欄位）
+- 盈虧統一由 `LineOrchestrator` 計算
+
+**影響文件**:
+- `src/autobet/autobet_engine.py` (line 45, 57, 402, 433)
+
+**測試**: `test_deprecated_net_removal()` ✅
+
+---
+
+### 2. ✅ 修復參與局排除邏輯
+
+**問題**: 參與的局（有下注）仍被記錄到策略歷史，導致策略判斷錯誤。
+
+**根本原因**: `LineOrchestrator.handle_result()` 先調用 `tracker.record()`，再檢查 `_pending`。
+
+**修復**:
+- 調整邏輯順序：**先檢查 `_pending`**，再決定是否記錄歷史
+- 觀察局（無 pending position）→ 記錄到歷史
+- 參與局（有 pending position）→ 不記錄，直接結算
+
+**影響文件**:
+- `src/autobet/lines/orchestrator.py` (line 445-476)
+
+**測試**: `test_orchestrator_participation_exclusion()` ✅
+
+**關鍵代碼**:
+```python
+# 先檢查是否有待處理倉位（參與局 vs 觀察局）
+pending_key = (table_id, round_id, strategy_key)
+position = self._pending.pop(pending_key, None)
+
+if not position:
+    # ✅ 觀察局：記錄到歷史
+    tracker.record(table_id, round_id, winner_code or "", timestamp)
+    continue
+
+# ✅ 參與局：不記錄，直接結算
+```
+
+---
+
+### 3. ✅ 統一 round_id 生成
+
+**問題**: round_id 不一致導致倉位追蹤失敗
+- PhaseDetector 生成: `detect-xxx_next`
+- ResultDetector 生成: `detect-yyy`
+- 下注時使用 `_next`，結算時找不到倉位
+
+**修復**:
+- 創建 `RoundManager` 統一管理 round_id
+- 格式統一: `round-{table_id}-{timestamp_ms}`
+- 移除 `_next` 後綴混淆
+- 集成到 `EngineWorker`
+
+**影響文件**:
+- `src/autobet/round_manager.py` (新文件，line 84)
+- `ui/workers/engine_worker.py` (line 1138-1152, 1462-1466)
+
+**測試**:
+- `test_round_manager_unified_ids()` ✅
+- `test_round_manager_participation_tracking()` ✅
+
+**關鍵改進**:
+- ✅ round_id 格式統一
+- ✅ 追蹤參與狀態 (`is_participated`)
+- ✅ 提供 `should_include_in_history()` 判斷接口
+- ✅ 標記下注和結算時間點
+
+---
+
+### 4. ✅ 乾跑模式修復
+
+**問題**: 乾跑模式下點擊失敗會拋出異常，測試無法完整運行。
+
+**修復**:
+- 檢查 `engine.dry` 標誌
+- 乾跑模式下允許點擊失敗，不拋出異常
+- 保持所有其他邏輯（盈虧計算、歷史記錄）照常運行
+
+**影響文件**:
+- `ui/workers/engine_worker.py` (line 1353-1389)
+
+**關鍵代碼**:
+```python
+is_dry_run = getattr(self.engine, 'dry', False)
+
+click_result = self.engine.act.click_chip_value(chip.value)
+if not click_result and not is_dry_run:  # 只在實戰模式拋異常
+    raise Exception(f"點擊失敗: {chip_desc}")
+```
+
+---
+
+### 驗證方式
+
+運行集成測試:
+```bash
+python test_p0_fixes.py
+```
+
+**測試結果** (2025-10-24):
+```
+✅ PASSED: test_deprecated_net_removal
+✅ PASSED: test_round_manager_unified_ids
+✅ PASSED: test_round_manager_participation_tracking
+✅ PASSED: test_orchestrator_participation_exclusion
+
+總計: 4/4 測試通過
+🎉 所有 P0 修復驗證通過！
+```
+
+---
+
 ## 長期目標
 
 建立一個**清晰、可維護、易擴展**的架構：

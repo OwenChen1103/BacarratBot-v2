@@ -3,7 +3,7 @@
   "provider": "WG/BG",
   "table_type": "standard",
   "created_at": "2025-10-16T10:00:00Z",
-  "last_updated": "2025-10-17T12:57:43.937626",
+  "last_updated": "2025-10-23T23:17:46.465107",
   "chips": [
     {
       "slot": 1,
@@ -11,8 +11,8 @@
       "color": "red",
       "label": "100",
       "calibrated": true,
-      "x": 645,
-      "y": 957
+      "x": 654,
+      "y": 959
     },
     {
       "slot": 2,
@@ -20,8 +20,8 @@
       "color": "gray",
       "label": "500",
       "calibrated": true,
-      "x": 712,
-      "y": 952
+      "x": 722,
+      "y": 956
     },
     {
       "slot": 3,
@@ -29,8 +29,8 @@
       "color": "orange",
       "label": "1K",
       "calibrated": true,
-      "x": 777,
-      "y": 956
+      "x": 784,
+      "y": 959
     },
     {
       "slot": 4,
@@ -63,27 +63,27 @@
   "bet_positions": {
     "banker": {
       "x": 1132,
-      "y": 832,
+      "y": 845,
       "calibrated": true
     },
     "player": {
-      "x": 781,
+      "x": 784,
       "y": 835,
       "calibrated": true
     },
     "tie": {
-      "x": 956,
-      "y": 820,
+      "x": 960,
+      "y": 828,
       "calibrated": true
     },
     "confirm": {
-      "x": 1130,
-      "y": 957,
+      "x": 1135,
+      "y": 959,
       "calibrated": true
     },
     "cancel": {
-      "x": 1246,
-      "y": 951,
+      "x": 1243,
+      "y": 956,
       "calibrated": true
     }
   },

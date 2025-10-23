@@ -1,9 +1,9 @@
 {
   "bead_plate_roi": {
-    "x": 208,
-    "y": 735,
-    "w": 396,
-    "h": 198
+    "x": 229,
+    "y": 746,
+    "w": 385,
+    "h": 193
   },
   "detection_config": {
     "check_interval_ms": 200,

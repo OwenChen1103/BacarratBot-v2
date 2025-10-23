@@ -10,6 +10,7 @@ from src.autobet.autobet_engine import AutoBetEngine
 from src.autobet.chip_profile_manager import ChipProfileManager
 from src.autobet.detectors import BeadPlateResultDetector
 from src.autobet.phase_detector import PhaseDetector
+from src.autobet.round_manager import RoundManager, RoundPhase
 from src.autobet.lines import (
     LineOrchestrator,
     TablePhase,
@@ -125,6 +126,10 @@ class EngineWorker(QThread):
     engine_status = Signal(dict)
     next_bet_info = Signal(dict)  # 即時下注詳情更新
 
+    # 🔥 新增: 結果局相關信號
+    bet_executed = Signal(dict)        # 下注執行完成後發送
+    result_settled = Signal(str, float)  # 結果計算完成後發送 (outcome, pnl)
+
     def __init__(self):
         super().__init__()
         self.engine = None
@@ -142,8 +147,11 @@ class EngineWorker(QThread):
         self._detection_timer: Optional[QTimer] = None
         self._detection_enabled = False
 
-        # PhaseDetector 相關狀態
+        # PhaseDetector 相關狀態（已棄用，改用 RoundManager）
         self._phase_detector: Optional[PhaseDetector] = None
+
+        # RoundManager - 統一管理局號和階段轉換
+        self._round_manager: Optional[RoundManager] = None
 
         self._latest_results: Dict[str, Dict[str, Any]] = {}
         self._line_orchestrator: Optional[LineOrchestrator] = None
@@ -463,6 +471,9 @@ class EngineWorker(QThread):
                     self._save_line_state()
                     self._flush_line_events()
 
+                    # 🔥 新增: 發送「結果已計算」信號
+                    self._emit_result_settled_signal(table_id, round_id, winner)
+
                     # 階段檢測現在由 PhaseDetector 自動處理
                     # PhaseDetector 會在 SETTLING → BETTABLE → LOCKED 的適當時機
                     # 通過 phase_changed 信號觸發 _on_phase_changed()
@@ -473,12 +484,13 @@ class EngineWorker(QThread):
                 self._last_winner = winner
                 self._store_latest_result(event)
 
-                # 模擬投注結果（這裡只是示例）
-                if winner in ["B", "P"]:
-                    # 模擬盈虧（隨機）
-                    import random
-                    profit = random.randint(-100, 150)
-                    self._net_profit += profit
+                # ✅ 從 LineOrchestrator 獲取真實 PnL（累積所有策略的 PnL）
+                if self._line_orchestrator:
+                    total_pnl = 0.0
+                    risk_snapshot = self._line_orchestrator.risk.snapshot()
+                    for scope_key, tracker_data in risk_snapshot.items():
+                        total_pnl += tracker_data.get("pnl", 0.0)
+                    self._net_profit = total_pnl
 
                 result_text_map = {"B": "莊", "P": "閒", "T": "和"}
                 result_text = result_text_map.get(winner, winner)
@@ -692,6 +704,75 @@ class EngineWorker(QThread):
             prefix = "".join(prefix_parts) + " "
         self._emit_log(level, module, f"{prefix}{message}")
 
+    def _emit_result_settled_signal(self, table_id: str, round_id: str, winner: str) -> None:
+        """
+        發送結果已計算信號 (查找剛剛結算的 Line 並計算 PnL)
+
+        Args:
+            table_id: 桌號
+            round_id: 局號
+            winner: 開獎結果 ("B" | "P" | "T")
+        """
+        if not self._line_orchestrator:
+            return
+
+        try:
+            from src.autobet.lines.state import LayerOutcome
+
+            # 遍歷該桌的所有策略，找到剛剛結算的
+            for strategy_key, line_state in self._line_orchestrator.line_states.get(table_id, {}).items():
+                # 檢查是否有最近的結果
+                if hasattr(line_state, 'layer_state') and line_state.layer_state.outcome:
+                    outcome = line_state.layer_state.outcome
+
+                    # 映射 LayerOutcome 到字符串
+                    outcome_map = {
+                        LayerOutcome.WIN: "win",
+                        LayerOutcome.LOSS: "loss",
+                        LayerOutcome.SKIPPED: "skip",
+                        LayerOutcome.CANCELLED: "skip",
+                    }
+                    outcome_str = outcome_map.get(outcome, "skip")
+
+                    # 計算 PnL (使用 PayoutManager)
+                    from src.autobet.payout_manager import PayoutManager
+                    pm = PayoutManager()
+
+                    stake = abs(line_state.layer_state.stake)
+
+                    # 獲取下注方向 (從 _pending 或根據策略推斷)
+                    direction = "B"  # 預設值
+                    pending_key = (table_id, round_id, strategy_key)
+                    if pending_key in self._line_orchestrator._pending:
+                        position = self._line_orchestrator._pending[pending_key]
+                        direction = position.direction.value
+                    else:
+                        # 已經 pop 掉了，嘗試從歷史推斷
+                        # 簡化版：使用策略配置
+                        definition = self._line_orchestrator.strategies.get(strategy_key)
+                        if definition:
+                            # 從 pattern 解析方向
+                            pattern = definition.entry.pattern.upper()
+                            if "BET B" in pattern:
+                                direction = "B"
+                            elif "BET P" in pattern:
+                                direction = "P"
+                            elif "BET T" in pattern:
+                                direction = "T"
+
+                    # 計算 PnL
+                    pnl = pm.calculate_pnl(stake, outcome.name, direction)
+
+                    # 發送信號
+                    self.result_settled.emit(outcome_str, pnl)
+                    self._emit_log("DEBUG", "Engine", f"📊 result_settled 信號已發送: {outcome_str} PnL={pnl:+.0f}")
+
+                    # 只處理第一個找到的結果
+                    break
+
+        except Exception as e:
+            self._emit_log("ERROR", "Engine", f"發送 result_settled 信號錯誤: {e}")
+
     def force_test_sequence(self):
         """強制測試點擊順序"""
         if not self.engine:
@@ -813,19 +894,75 @@ class EngineWorker(QThread):
     # ------------------------------------------------------------------
 
     def _setup_phase_detector(self) -> None:
-        """初始化 PhaseDetector（階段檢測器）"""
+        """初始化 RoundManager（統一的局號和階段管理器）"""
         try:
-            # 創建 PhaseDetector 實例
+            # 創建 RoundManager 實例
+            self._round_manager = RoundManager(parent=self)
+
+            # 連接 RoundManager 信號
+            self._round_manager.phase_changed.connect(self._on_phase_changed)
+            self._round_manager.result_confirmed.connect(self._on_result_confirmed)
+
+            self._emit_log("INFO", "RoundManager", "✅ RoundManager 初始化完成")
+
+            # 保留舊的 PhaseDetector（用於時間控制）
             self._phase_detector = PhaseDetector(parent=self)
-
-            # 連接階段變化信號到處理函數
-            self._phase_detector.phase_changed.connect(self._on_phase_changed)
-
-            self._emit_log("INFO", "PhaseDetector", "✅ 階段檢測器初始化完成")
+            # 連接 PhaseDetector 信號，但會被攔截並由 RoundManager 處理
+            self._phase_detector.phase_changed.connect(self._on_phase_detector_signal)
 
         except Exception as e:
-            self._emit_log("ERROR", "PhaseDetector", f"初始化失敗: {e}")
+            self._emit_log("ERROR", "RoundManager", f"初始化失敗: {e}")
+            self._round_manager = None
             self._phase_detector = None
+
+    def _on_phase_detector_signal(self, table_id: str, round_id: str, phase: str, timestamp: float) -> None:
+        """
+        攔截 PhaseDetector 的信號，使用 RoundManager 重新路由
+
+        PhaseDetector 會生成帶 _next 的 round_id，但我們需要使用 RoundManager 的統一 round_id
+        """
+        if not self._round_manager:
+            # 如果沒有 RoundManager，直接傳遞信號
+            self._on_phase_changed(table_id, round_id, phase, timestamp)
+            return
+
+        try:
+            # 根據階段類型，讓 RoundManager 執行階段轉換
+            if phase == "bettable":
+                actual_round_id = self._round_manager.transition_to_bettable(table_id)
+                if actual_round_id:
+                    # RoundManager 會發送 phase_changed 信號，無需手動調用 _on_phase_changed
+                    pass
+                else:
+                    self._emit_log("WARNING", "RoundManager", f"無法轉換到 BETTABLE")
+
+            elif phase == "locked":
+                actual_round_id = self._round_manager.transition_to_locked(table_id)
+                if actual_round_id:
+                    # RoundManager 會發送 phase_changed 信號
+                    pass
+                else:
+                    self._emit_log("WARNING", "RoundManager", f"無法轉換到 LOCKED")
+
+        except Exception as e:
+            self._emit_log("ERROR", "RoundManager", f"階段轉換錯誤: {e}")
+            # 發生錯誤時，使用原始信號
+            self._on_phase_changed(table_id, round_id, phase, timestamp)
+
+    def _on_result_confirmed(self, table_id: str, round_id: str, winner: str, timestamp: float) -> None:
+        """
+        處理 RoundManager 發送的結果確認信號
+
+        這個信號在 RoundManager.on_result_detected() 時發送
+
+        Args:
+            table_id: 桌號
+            round_id: 局號
+            winner: 贏家
+            timestamp: 時間戳
+        """
+        self._emit_log("DEBUG", "RoundManager",
+                      f"結果確認: table={table_id} round={round_id} winner={winner} ts={timestamp:.2f}")
 
     def _on_phase_changed(self, table_id: str, round_id: str, phase: str, timestamp: float) -> None:
         """
@@ -1046,9 +1183,31 @@ class EngineWorker(QThread):
             if result.winner and result.state == "detected":
                 winner_map = {"B": "莊", "P": "閒", "T": "和"}
                 winner_text = winner_map.get(result.winner, result.winner)
+                table_id = self._selected_table or "main"
 
-                # 使用檢測時間的毫秒級時間戳作為 round_id（確保唯一性）
-                round_id = f"detect-{int(result.detected_at * 1000)}"
+                # 使用 RoundManager 生成統一的 round_id
+                if self._round_manager:
+                    round_id = self._round_manager.on_result_detected(
+                        table_id, result.winner, result.detected_at
+                    )
+                    self._emit_log(
+                        "INFO",
+                        "ResultDetector",
+                        f"✅ 檢測到結果: {winner_text} (信心: {result.confidence:.3f}) | 局號: {round_id}"
+                    )
+
+                    # 啟動階段轉換定時器（SETTLING → BETTABLE → LOCKED）
+                    if self._phase_detector:
+                        # 使用舊的 PhaseDetector 來控制時間，但 round_id 由 RoundManager 管理
+                        self._phase_detector.on_result_detected(table_id, round_id, result.winner)
+                else:
+                    # 如果 RoundManager 未初始化，使用舊方式（向後兼容）
+                    round_id = f"detect-{int(result.detected_at * 1000)}"
+                    self._emit_log(
+                        "WARNING",
+                        "RoundManager",
+                        "RoundManager 未初始化，使用舊方式生成 round_id"
+                    )
 
                 # 產生事件
                 event = {
@@ -1057,25 +1216,11 @@ class EngineWorker(QThread):
                     "source": "image_detection",
                     "confidence": result.confidence,
                     "received_at": int(result.detected_at * 1000),
-                    "table_id": self._selected_table or "main",  # 單桌模式
+                    "table_id": table_id,
                     "round_id": round_id
                 }
 
                 self._incoming_events.put(event)
-                self._emit_log(
-                    "INFO",
-                    "ResultDetector",
-                    f"✅ 檢測到結果: {winner_text} (信心: {result.confidence:.3f})"
-                )
-
-                # 通知 PhaseDetector 開始階段轉換循環
-                if self._phase_detector:
-                    table_id = self._selected_table or "main"
-                    self._phase_detector.on_result_detected(table_id, round_id, result.winner)
-                    self._emit_log("DEBUG", "PhaseDetector",
-                                  f"已通知 PhaseDetector 開始階段循環: {round_id}")
-                else:
-                    self._emit_log("WARNING", "PhaseDetector", "PhaseDetector 未初始化")
 
         except Exception as e:
             self._emit_log("ERROR", "ResultDetector", f"檢測錯誤: {e}")
@@ -1247,15 +1392,12 @@ class EngineWorker(QThread):
                     return
 
                 # 獲取當前層數資訊
-                current_layer_info = "N/A"
+                current_layer_info = decision.layer_index + 1
                 total_layers = "N/A"
-                if self._line_orchestrator:
-                    for line_state in self._line_orchestrator.line_states.values():
-                        if line_state.strategy_key == decision.strategy_key:
-                            current_layer_info = decision.layer_index + 1
-                            if line_state.progression and line_state.progression.sequence:
-                                total_layers = len(line_state.progression.sequence)
-                            break
+                if self._line_orchestrator and decision.strategy_key in self._line_orchestrator.strategies:
+                    strategy_def = self._line_orchestrator.strategies[decision.strategy_key]
+                    if strategy_def.staking and strategy_def.staking.sequence:
+                        total_layers = len(strategy_def.staking.sequence)
 
                 # 發送即時更新到 NextBetCard
                 self.next_bet_info.emit({
@@ -1264,7 +1406,7 @@ class EngineWorker(QThread):
                     'layer': f"{current_layer_info}/{total_layers}",
                     'direction': target,
                     'amount': decision.amount,
-                    'recipe': bet_plan.description
+                    'recipe': bet_plan.recipe
                 })
 
                 self._emit_log(
@@ -1276,10 +1418,15 @@ class EngineWorker(QThread):
                 # 執行下注序列（帶詳細日誌和回滾）
                 if self.engine.act:
                     execution_log = []  # 記錄執行步驟，用於錯誤追蹤
+                    is_dry_run = getattr(self.engine, 'dry', False)  # 檢查是否為乾跑模式
+
+                    # Debug: 顯示乾跑模式狀態
+                    self._emit_log("DEBUG", "Line", f"🔍 乾跑模式檢查: engine.dry={is_dry_run}")
 
                     try:
                         total_steps = len(bet_plan.chips)
-                        self._emit_log("INFO", "Line", f"🚀 開始執行下注序列 (共 {total_steps} 個籌碼)")
+                        mode_text = "乾跑" if is_dry_run else "實戰"
+                        self._emit_log("INFO", "Line", f"🚀 開始執行下注序列 (共 {total_steps} 個籌碼) [{mode_text}模式]")
 
                         # 依序執行每個籌碼的放置
                         for idx, chip in enumerate(bet_plan.chips, 1):
@@ -1290,7 +1437,8 @@ class EngineWorker(QThread):
                             self._emit_log("DEBUG", "Line", f"  [{step_info}] {chip_desc}")
                             execution_log.append(("chip", chip.value))
 
-                            if not self.engine.act.click_chip_value(chip.value):
+                            click_result = self.engine.act.click_chip_value(chip.value)
+                            if not click_result and not is_dry_run:
                                 raise Exception(f"{step_info} 失敗: {chip_desc}")
 
                             # 點擊下注區
@@ -1298,13 +1446,41 @@ class EngineWorker(QThread):
                             self._emit_log("DEBUG", "Line", f"  [{step_info}] {bet_desc}")
                             execution_log.append(("bet", target))
 
-                            if not self.engine.act.click_bet(target):
+                            bet_result = self.engine.act.click_bet(target)
+                            if not bet_result and not is_dry_run:
                                 raise Exception(f"{step_info} 失敗: {bet_desc}")
 
                         # 所有步驟成功，確認下注
                         self._emit_log("DEBUG", "Line", "  最後步驟: 確認下注")
                         self.engine.act.confirm()
-                        self._emit_log("INFO", "Line", f"✅ 訂單執行完成: {decision.strategy_key}")
+
+                        if is_dry_run:
+                            self._emit_log("INFO", "Line", f"✅ 訂單執行完成 (乾跑模擬): {decision.strategy_key}")
+                        else:
+                            self._emit_log("INFO", "Line", f"✅ 訂單執行完成: {decision.strategy_key}")
+
+                        # 🔥 標記 RoundManager：這一局有下注（用於排除歷史）
+                        if self._round_manager:
+                            self._round_manager.mark_bet_placed(decision.table_id, decision.round_id)
+                            self._emit_log("DEBUG", "RoundManager",
+                                         f"✅ 已標記下注: round={decision.round_id}")
+
+                        # 🔥 發送「下注已執行」信號
+                        if self._line_orchestrator:
+                            definition = self._line_orchestrator.strategies.get(decision.strategy_key)
+                            if definition:
+                                self.bet_executed.emit({
+                                    "strategy": decision.strategy_key,
+                                    "direction": decision.direction.value.lower(),
+                                    "amount": decision.amount,
+                                    "current_layer": decision.layer_index + 1,  # UI 顯示從1開始
+                                    "total_layers": len(definition.staking.sequence),
+                                    "round_id": decision.round_id,
+                                    "sequence": list(definition.staking.sequence),
+                                    "on_win": "RESET" if definition.staking.reset_on_win else "ADVANCE",
+                                    "on_loss": "ADVANCE" if definition.staking.advance_on.value == "loss" else "RESET"
+                                })
+                                self._emit_log("DEBUG", "Line", f"📍 bet_executed 信號已發送")
 
                     except Exception as e:
                         # 執行失敗，記錄詳細錯誤和已執行步驟
@@ -1333,5 +1509,8 @@ class EngineWorker(QThread):
                 self._emit_log("ERROR", "Line", "SmartChipPlanner 未初始化，無法執行訂單")
 
         except Exception as e:
+            import traceback
+            tb_str = ''.join(traceback.format_tb(e.__traceback__))
             self._emit_log("ERROR", "Line", f"處理 Line 訂單錯誤: {e}")
+            self._emit_log("DEBUG", "Line", f"錯誤堆棧:\n{tb_str}")
 

@@ -7,7 +7,9 @@
       "Bash(chcp 65001)",
       "Bash(powershell -Command \"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; cd 'c:\\Users\\owen9\\OneDrive\\Desktop\\Bagarrat\\BacarratBot-v2'; python test_phase_flow.py\":*)",
       "Bash(find:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(tree:*)",
+      "Bash(git fetch:*)"
     ],
     "deny": [],
     "ask": []

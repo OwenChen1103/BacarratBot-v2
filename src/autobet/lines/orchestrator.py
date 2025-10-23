@@ -20,6 +20,7 @@ from .metrics import MetricsTracker, EventRecord, EventType, LatencyMetrics
 from .performance import PerformanceTracker
 from .signal import SignalTracker
 from .state import LayerOutcome, LayerProgression, LinePhase, LineState, LayerState
+from src.autobet.payout_manager import PayoutManager
 
 
 class TablePhase(str, Enum):
@@ -349,6 +350,9 @@ class LineOrchestrator:
         self.conflict_history: List[ConflictRecord] = []
         self.max_conflict_history: int = 100
 
+        # ✅ 賠率管理器（處理真實賠率計算）
+        self.payout_manager = PayoutManager()
+
     # ------------------------------------------------------------------
     def register_strategy(self, definition: StrategyDefinition, tables: Optional[Iterable[str]] = None) -> None:
         self.strategies[definition.strategy_key] = definition
@@ -438,50 +442,37 @@ class LineOrchestrator:
         for strategy_key, definition in self._strategies_for_table(table_id):
             tracker = self.signal_trackers[strategy_key]
 
-            # 🔍 CRITICAL: 記錄呼叫 tracker.record 之前的狀態
-            history_before = tracker._get_recent_winners(table_id, 10)
-            self._record_event(
-                "DEBUG",
-                f"📝 呼叫 tracker.record 之前: strategy={strategy_key} table={table_id} 歷史長度={len(tracker.history.get(table_id, []))} 近期={history_before}",
-                {"table": table_id},
-            )
-
-            tracker.record(table_id, round_id, winner_code or "", timestamp)
-
-            # 🔍 CRITICAL: 記錄呼叫 tracker.record 之後的狀態
-            history_after_record = tracker._get_recent_winners(table_id, 10)
-            self._record_event(
-                "DEBUG",
-                f"✅ tracker.record 完成: strategy={strategy_key} table={table_id} winner_code={winner_code} 歷史長度={len(tracker.history.get(table_id, []))} 近期={history_after_record}",
-                {"table": table_id},
-            )
-
-            # 記錄關鍵事件：開獎結果和歷史記錄
-            history_after = tracker._get_recent_winners(table_id, 10)
-            self._record_event(
-                "INFO",
-                f"📊 策略 {strategy_key} | 桌號 {table_id} | 開獎 {winner_code} | 歷史記錄 {history_after}",
-                {"table": table_id},
-            )
-
+            # 先檢查是否有待處理倉位（參與局 vs 觀察局）
             pending_key = (table_id, round_id, strategy_key)
             position = self._pending.pop(pending_key, None)
+
             if not position:
-                # 結果到達但找不到對應的待處理倉位
-                # 可能原因：
-                # 1. 決策被資金池拒絕
-                # 2. 決策被衝突解決器拒絕
-                # 3. 決策執行失敗
-                # 4. round_id 不匹配
+                # ✅ 觀察局：沒有待處理倉位，記錄到歷史
                 self._record_event(
-                    "WARNING",
-                    f"⚠️ 結果無匹配的待處理倉位: table={table_id} round={round_id} strategy={strategy_key}",
-                    {"table": table_id}
+                    "DEBUG",
+                    f"📝 觀察局：記錄到歷史 | strategy={strategy_key} table={table_id}",
+                    {"table": table_id},
                 )
 
-                # 仍然記錄到 tracker，避免歷史數據遺漏
-                # （tracker.record 已在前面第421行執行，所以這裡只需 continue）
+                tracker.record(table_id, round_id, winner_code or "", timestamp)
+
+                # 記錄歷史狀態
+                history_after = tracker._get_recent_winners(table_id, 10)
+                self._record_event(
+                    "INFO",
+                    f"📊 策略 {strategy_key} | 桌號 {table_id} | 開獎 {winner_code} | 歷史記錄 {history_after}",
+                    {"table": table_id},
+                )
+
+                # 沒有倉位需要結算，繼續下一個策略
                 continue
+
+            # ✅ 參與局：有待處理倉位，不記錄到歷史，直接結算
+            self._record_event(
+                "INFO",
+                f"💰 參與局：結算倉位（不計入歷史） | strategy={strategy_key} table={table_id} round={round_id}",
+                {"table": table_id},
+            )
 
             # ✅ 移除倉位追蹤（結算後）
             self.positions.remove_position(table_id, strategy_key)
@@ -490,7 +481,7 @@ class LineOrchestrator:
             progression = self._get_progression(table_id, strategy_key)
 
             outcome = self._determine_outcome(position.direction, winner_code)
-            pnl_delta = self._pnl_delta(position.amount, outcome)
+            pnl_delta = self._pnl_delta(position.amount, outcome, position.direction)
             line_state.record_outcome(outcome, pnl_delta)
 
             # 記錄度量數據
@@ -846,13 +837,23 @@ class LineOrchestrator:
             return LayerOutcome.WIN
         return LayerOutcome.LOSS
 
-    @staticmethod
-    def _pnl_delta(amount: float, outcome: LayerOutcome) -> float:
-        if outcome == LayerOutcome.WIN:
-            return float(amount)
-        if outcome == LayerOutcome.LOSS:
-            return float(-amount)
-        return 0.0
+    def _pnl_delta(self, amount: float, outcome: LayerOutcome, direction: BetDirection) -> float:
+        """
+        計算 PnL 增量（使用 PayoutManager 處理真實賠率）
+
+        Args:
+            amount: 下注金額
+            outcome: 結果 (WIN/LOSS/SKIPPED/CANCELLED)
+            direction: 下注方向 (BANKER/PLAYER/TIE)
+
+        Returns:
+            PnL 增量（正數為贏，負數為輸）
+        """
+        return self.payout_manager.calculate_pnl(
+            amount=amount,
+            outcome=outcome.name,
+            direction=direction.value
+        )
 
     def _apply_risk_event(self, event: RiskEvent, table_id: str, strategy_key: str) -> None:
         scope = ":".join(event.scope_key)

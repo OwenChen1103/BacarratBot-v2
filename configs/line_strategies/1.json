@@ -1,7 +1,7 @@
 {
   "strategy_key": "1",
   "entry": {
-    "pattern": "PP then bet B",
+    "pattern": "PB then bet P",
     "valid_window_sec": 0.0,
     "dedup": "overlap_dedup",
     "first_trigger_layer": 1
@@ -9,8 +9,8 @@
   "staking": {
     "sequence": [
       100,
-      200,
-      300
+      500,
+      1000
     ],
     "advance_on": "loss",
     "reset_on_win": true,

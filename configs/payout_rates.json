@@ -1,0 +1,27 @@
+{
+  "description": "百家樂賠率設定 (可根據不同賭場規則調整)",
+  "rates": {
+    "banker": {
+      "win": 0.95,
+      "description": "莊家贏 1:0.95 (扣除5%佣金)"
+    },
+    "player": {
+      "win": 1.0,
+      "description": "閒家贏 1:1"
+    },
+    "tie": {
+      "win": 8.0,
+      "description": "和局贏 1:8 (部分賭場是 1:9)"
+    }
+  },
+  "skip_rules": {
+    "banker_tie": {
+      "payout": 0.0,
+      "description": "押莊遇和局，退回本金"
+    },
+    "player_tie": {
+      "payout": 0.0,
+      "description": "押閒遇和局，退回本金"
+    }
+  }
+}

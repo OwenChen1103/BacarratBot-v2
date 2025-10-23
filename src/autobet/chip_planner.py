@@ -139,7 +139,7 @@ class SmartChipPlanner:
         for chip in self.available_chips:
             count = remain // chip.value
             if count > 0:
-                selected_chips.extend([chip] * count)
+                selected_chips.extend([chip] * int(count))
                 remain -= chip.value * count
 
         actual_amount = target_amount - remain

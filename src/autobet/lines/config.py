@@ -46,7 +46,7 @@ class RiskScope(str, Enum):
 class EntryConfig:
     pattern: str
     valid_window_sec: float = 0.0
-    dedup: DedupMode = DedupMode.OVERLAP
+    dedup: DedupMode = DedupMode.STRICT  # 🔥 改為 STRICT，避免歷史重疊觸發
     first_trigger_layer: int = 1
 
 

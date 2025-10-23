@@ -15,7 +15,7 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QTextCursor, QColor, QPalette
 
 from ..workers.engine_worker import EngineWorker
-# from ..components.next_bet_card import NextBetCard  # 舊版，已被精簡卡片取代
+from ..components.next_bet_card import NextBetCard  # ✅ 結果局顯示卡片
 from ..components import CompactStrategyInfoCard, CompactLiveCard
 
 # 桌號映射: canonical_id -> display_name (僅供 UI 顯示)
@@ -1327,7 +1327,7 @@ class DashboardPage(QWidget):
 
         # 創建組件
         # self.strategy_status_card = self.create_strategy_status_indicator()  # 舊版
-        # self.next_bet_card = NextBetCard()  # 舊版
+        self.next_bet_card = NextBetCard()  # ✅ 結果局顯示卡片（顯示下注詳情和影響預測）
         self.compact_strategy_card = CompactStrategyInfoCard()  # ✅ 新版精簡卡片
         self.compact_live_card = CompactLiveCard()  # ✅ 新版即時狀態卡片
         # self.click_sequence_card = ClickSequenceCard()  # 已過時：SmartChipPlanner 自動生成計畫
@@ -1366,11 +1366,12 @@ class DashboardPage(QWidget):
         tab1_layout.addWidget(self.compact_strategy_card)
         tab1_layout.addStretch()
 
-        # Tab 2: 即時狀態（新版動態顯示）
+        # Tab 2: 即將下注（即時狀態 + 結果局）
         tab2 = QWidget()
         tab2_layout = QVBoxLayout(tab2)
         tab2_layout.setContentsMargins(8, 8, 8, 8)
-        tab2_layout.addWidget(self.compact_live_card)
+        tab2_layout.addWidget(self.compact_live_card)  # 即時狀態（等待觸發/準備下注/等待開獎）
+        tab2_layout.addWidget(self.next_bet_card)      # 結果局詳情（下注後顯示，含影響預測）
         tab2_layout.addStretch()
 
         # Tab 3: 開獎結果
@@ -1529,6 +1530,8 @@ class DashboardPage(QWidget):
         self.engine_worker.log_message.connect(self.on_log_message)
         self.engine_worker.engine_status.connect(self.on_engine_status)
         self.engine_worker.next_bet_info.connect(self.on_next_bet_info)
+        self.engine_worker.bet_executed.connect(self.on_bet_executed)       # 下注後顯示結果局
+        self.engine_worker.result_settled.connect(self.on_result_settled)   # 開獎後更新結果
 
         # 啟動工作執行緒
         self.engine_worker.start()
@@ -1809,11 +1812,53 @@ class DashboardPage(QWidget):
         except Exception as e:
             self.log_viewer.add_log("ERROR", "Dashboard", f"更新下注卡片失敗: {e}")
 
+    def on_bet_executed(self, bet_data: Dict[str, Any]) -> None:
+        """
+        接收下注執行信號，顯示結果局
+
+        Args:
+            bet_data: 包含策略、方向、金額、層級等資訊
+        """
+        try:
+            self.next_bet_card.show_result_round(bet_data)
+            self.log_viewer.add_log(
+                "INFO",
+                "Dashboard",
+                f"⏳ 結果局開始: {bet_data.get('strategy', 'N/A')} | "
+                f"{bet_data.get('direction', 'N/A')} | "
+                f"${bet_data.get('amount', 0)}"
+            )
+        except Exception as e:
+            self.log_viewer.add_log("ERROR", "Dashboard", f"顯示結果局失敗: {e}")
+
+    def on_result_settled(self, outcome: str, pnl: float) -> None:
+        """
+        接收結果結算信號，更新結果局狀態
+
+        Args:
+            outcome: 結果 ("win", "loss", "skip")
+            pnl: 盈虧金額
+        """
+        try:
+            self.next_bet_card.update_result_outcome(outcome, pnl)
+            outcome_emoji = {"win": "✅", "loss": "❌", "skip": "⏭️"}.get(outcome, "❓")
+            self.log_viewer.add_log(
+                "INFO",
+                "Dashboard",
+                f"{outcome_emoji} 結果局結算: {outcome.upper()} | PnL: ${pnl:+.2f}"
+            )
+        except Exception as e:
+            self.log_viewer.add_log("ERROR", "Dashboard", f"更新結果局失敗: {e}")
+
     def on_engine_status(self, status):
         """引擎狀態更新"""
         latest = status.get("latest_results")
         if not isinstance(latest, dict):
             latest = {}
+
+        # ✅ 初始化 is_new 和 round_id 變量（避免作用域問題）
+        is_new = False
+        round_id = None
 
         # 檢測新結果並添加到歷史
         if latest and "main" in latest:
@@ -1878,8 +1923,8 @@ class DashboardPage(QWidget):
             if hasattr(self, 'compact_live_card'):
                 self.compact_live_card.update_from_snapshot(summary, table_id="main")
 
-                # 如果有新結果，添加到路單歷史
-                if latest and "main" in latest:
+                # ✅ 只在新結果時添加到路單歷史（使用上面的 is_new 判斷）
+                if is_new and round_id and latest and "main" in latest:
                     info = latest.get("main")
                     if info and info.get("winner"):
                         winner = info.get("winner")

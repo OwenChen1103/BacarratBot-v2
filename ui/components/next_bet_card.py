@@ -17,9 +17,8 @@ class NextBetCard(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.strategy_data = None
         self._build_ui()
-        self._load_strategy()
+        self.setVisible(False)  # 預設完全隱藏，只在結果局時顯示
 
     def _build_ui(self) -> None:
         self.setFrameStyle(QFrame.StyledPanel)
@@ -33,248 +32,241 @@ class NextBetCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
+        layout.setSpacing(12)
         layout.setContentsMargins(12, 12, 12, 12)
 
-        # 標題與狀態指示器（合併在一行）
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(8)
+        # === 🔥 結果局區塊（預設隱藏，只在下注後顯示）===
 
-        header = QLabel("⚙️ 策略狀態")
-        header.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
-        header.setStyleSheet("color: #f3f4f6;")
-        header_layout.addWidget(header)
+        # 結果局容器
+        self.result_container = QWidget()
+        result_layout = QVBoxLayout(self.result_container)
+        result_layout.setSpacing(8)
+        result_layout.setContentsMargins(0, 8, 0, 0)
 
-        header_layout.addStretch()
+        # 結果局標題
+        result_header_layout = QHBoxLayout()
+        self.result_header = QLabel("⏳ 結果局 - 等待開獎")
+        self.result_header.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+        self.result_header.setStyleSheet("color: #fbbf24;")
+        result_header_layout.addWidget(self.result_header)
 
-        self.status_indicator = QLabel("●")
-        self.status_indicator.setFont(QFont("Arial", 12))
-        self.status_indicator.setStyleSheet("color: #6b7280;")
-        header_layout.addWidget(self.status_indicator)
+        result_header_layout.addStretch()
 
-        self.status_label = QLabel("等待啟動")
-        self.status_label.setFont(QFont("Microsoft YaHei UI", 9))
-        self.status_label.setStyleSheet("color: #9ca3af;")
-        header_layout.addWidget(self.status_label)
+        # 狀態指示燈
+        self.result_status_dot = QLabel("●")
+        self.result_status_dot.setFont(QFont("Arial", 12))
+        self.result_status_dot.setStyleSheet("color: #fbbf24;")
+        result_header_layout.addWidget(self.result_status_dot)
 
-        layout.addLayout(header_layout)
+        result_layout.addLayout(result_header_layout)
 
-        # 策略配置（緊湊版）
-        self.strategy_config_label = QLabel()
-        self.strategy_config_label.setFont(QFont("Microsoft YaHei UI", 8))
-        self.strategy_config_label.setStyleSheet("""
+        # 結果局詳細資訊
+        self.result_info_label = QLabel()
+        self.result_info_label.setFont(QFont("Microsoft YaHei UI", 9))
+        self.result_info_label.setStyleSheet("""
+            QLabel {
+                color: #e5e7eb;
+                background-color: #111827;
+                border: 1px solid #fbbf24;
+                border-radius: 4px;
+                padding: 10px;
+            }
+        """)
+        self.result_info_label.setWordWrap(True)
+        result_layout.addWidget(self.result_info_label)
+
+        # 影響預測
+        self.result_impact_label = QLabel()
+        self.result_impact_label.setFont(QFont("Microsoft YaHei UI", 8))
+        self.result_impact_label.setStyleSheet("""
             QLabel {
                 color: #d1d5db;
-                background-color: #1f2937;
-                border: 1px solid #4b5563;
+                background-color: #0f172a;
+                border: 1px solid #374151;
                 border-radius: 4px;
                 padding: 8px;
             }
         """)
-        self.strategy_config_label.setWordWrap(True)
-        self.strategy_config_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        layout.addWidget(self.strategy_config_label)
+        self.result_impact_label.setWordWrap(True)
+        result_layout.addWidget(self.result_impact_label)
 
-        # 分隔線
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setStyleSheet("background-color: #4b5563; max-height: 1px;")
-        layout.addWidget(separator)
-
-        # 下一手詳情（緊湊版）
-        next_bet_header = QLabel("🎯 下一手")
-        next_bet_header.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
-        next_bet_header.setStyleSheet("color: #d1d5db;")
-        layout.addWidget(next_bet_header)
-
-        # 桌台與層數信息
-        self.table_layer_label = QLabel("等待啟動引擎...")
-        self.table_layer_label.setFont(QFont("Microsoft YaHei UI", 8))
-        self.table_layer_label.setStyleSheet("color: #9ca3af;")
-        self.table_layer_label.setWordWrap(True)
-        layout.addWidget(self.table_layer_label)
-
-        # 下注方向與金額
-        self.direction_amount_label = QLabel()
-        self.direction_amount_label.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
-        self.direction_amount_label.setStyleSheet("color: #ffffff;")
-        self.direction_amount_label.setWordWrap(True)
-        layout.addWidget(self.direction_amount_label)
-
-        # 配方詳情
-        self.recipe_label = QLabel()
-        self.recipe_label.setFont(QFont("Consolas", 8))
-        self.recipe_label.setStyleSheet("""
-            QLabel {
-                color: #d1d5db;
-                background-color: #111827;
-                border: 1px solid #374151;
-                border-radius: 4px;
-                padding: 6px;
-            }
-        """)
-        self.recipe_label.setWordWrap(True)
-        self.recipe_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        layout.addWidget(self.recipe_label)
+        self.result_container.setVisible(False)  # 預設隱藏
+        layout.addWidget(self.result_container)
 
         layout.addStretch()
 
-    def _load_strategy(self) -> None:
-        """載入策略配置 - 優先載入 line_strategies"""
-        # 優先載入 line_strategies (新系統)
-        line_strategies_dir = "configs/line_strategies"
-        if os.path.exists(line_strategies_dir):
-            try:
-                # 載入第一個策略 (假設用戶使用策略 "1")
-                strategy_files = [f for f in os.listdir(line_strategies_dir) if f.endswith('.json')]
-                if strategy_files:
-                    # 載入第一個找到的策略
-                    first_strategy = os.path.join(line_strategies_dir, strategy_files[0])
-                    with open(first_strategy, 'r', encoding='utf-8') as f:
-                        self.strategy_data = json.load(f)
-                    self.strategy_data['_type'] = 'line_strategy'  # 標記類型
-                    self._update_strategy_display()
-                    return
-            except Exception as e:
-                self.strategy_config_label.setText(f"❌ 策略載入失敗: {e}")
-        else:
-            self.strategy_config_label.setText("❌ 未找到線路策略，請先在「策略設定」頁面創建策略")
+    # === 🔥 結果局相關方法 ===
 
-    def _update_strategy_display(self) -> None:
-        """更新策略配置顯示"""
-        if not self.strategy_data:
-            self.strategy_config_label.setText("❌ 未載入策略")
-            return
-
-        strategy_type = self.strategy_data.get('_type', 'unknown')
-
-        if strategy_type == 'line_strategy':
-            # 線路策略格式
-            self._display_line_strategy()
-        else:
-            self.strategy_config_label.setText("❌ 未知的策略格式")
-
-    def _display_line_strategy(self) -> None:
-        """顯示 line_strategy 格式的策略"""
-        strategy_key = self.strategy_data.get('strategy_key', '未知')
-        entry = self.strategy_data.get('entry', {})
-        staking = self.strategy_data.get('staking', {})
-
-        # 觸發模式
-        pattern = entry.get('pattern', '未設定')
-
-        # 注碼序列
-        sequence = staking.get('sequence', [])
-        sequence_text = ' → '.join([f"{s}元" for s in sequence])
-
-        # 進階規則
-        advance_on = staking.get('advance_on', 'loss')
-        advance_text = "輸進層" if advance_on == 'loss' else "贏進層"
-
-        # 重置規則
-        reset_on_win = staking.get('reset_on_win', False)
-        reset_text = "贏重置" if reset_on_win else ""
-
-        # 疊注策略
-        stack_policy = staking.get('stack_policy', 'none')
-        stack_map = {'none': '禁止疊注', 'merge': '合併注單', 'parallel': '平行下注'}
-        stack_text = stack_map.get(stack_policy, stack_policy)
-
-        config_text = (
-            f"策略:{strategy_key} | 模式:{pattern}\n"
-            f"序列:{sequence_text}\n"
-            f"{advance_text} | {reset_text} | {stack_text}"
-        )
-
-        self.strategy_config_label.setText(config_text)
-
-    def set_engine_running(self, running: bool) -> None:
-        """設置引擎運行狀態"""
-        if running:
-            self.status_indicator.setStyleSheet("color: #10b981;")  # 綠色
-            self.status_label.setText("策略運行中")
-            self.status_label.setStyleSheet("color: #10b981; font-weight: bold;")
-            self.table_layer_label.setText("等待檢測下注時機...")
-            self.table_layer_label.setStyleSheet("color: #e5e7eb;")
-        else:
-            self.status_indicator.setStyleSheet("color: #6b7280;")  # 灰色
-            self.status_label.setText("等待啟動")
-            self.status_label.setStyleSheet("color: #9ca3af; font-weight: bold;")
-            self.table_layer_label.setText("等待啟動引擎...")
-            self.table_layer_label.setStyleSheet("color: #9ca3af;")
-            self.direction_amount_label.setText("")
-            self.recipe_label.setText("")
-
-    def update_next_bet(
-        self,
-        table: str,
-        strategy: str,
-        current_layer: int,
-        direction: str,
-        amount: int,
-        recipe: str,
-        win_action: str = "",
-        loss_action: str = ""
-    ) -> None:
+    def show_result_round(self, data: Dict[str, Any]) -> None:
         """
-        更新下一手詳情
+        顯示結果局 (已下注，等待開獎)
 
         Args:
-            table: 桌號
-            strategy: 策略名稱
-            current_layer: 當前層數
-            direction: 下注方向 (B/P/T)
-            amount: 下注金額
-            recipe: 下注配方
-            win_action: 獲勝後的動作
-            loss_action: 失敗後的動作
+            data: {
+                "strategy": "martingale_bpp",
+                "direction": "banker" | "player" | "tie",
+                "amount": 200,
+                "current_layer": 2,
+                "total_layers": 4,
+                "round_id": "detect-1234567890",
+                "sequence": [100, 200, 400, 800],
+                "on_win": "RESET" | "ADVANCE",
+                "on_loss": "ADVANCE" | "RESET"
+            }
         """
-        # 桌台與層數
-        self.table_layer_label.setText(
-            f"桌台: {table} | 策略: {strategy} | 第 {current_layer} 層"
-        )
-        self.table_layer_label.setStyleSheet("color: #e5e7eb;")
+        # 顯示整個卡片和結果局容器
+        self.setVisible(True)
+        self.result_container.setVisible(True)
 
-        # 方向與金額
+        # 方向映射
         direction_map = {
-            "B": ("莊家", "#ef4444"),
-            "P": ("閒家", "#3b82f6"),
-            "T": ("和局", "#10b981"),
-            "banker": ("莊家", "#ef4444"),
-            "player": ("閒家", "#3b82f6"),
-            "tie": ("和局", "#10b981"),
+            "banker": ("🔴 莊家", "#ef4444"),
+            "player": ("🔵 閒家", "#3b82f6"),
+            "tie": ("🟢 和局", "#10b981"),
+            "B": ("🔴 莊家", "#ef4444"),
+            "P": ("🔵 閒家", "#3b82f6"),
+            "T": ("🟢 和局", "#10b981"),
         }
-        direction_text, direction_color = direction_map.get(direction, (direction, "#ffffff"))
-
-        self.direction_amount_label.setText(
-            f"方向: {direction_text} | 金額: {amount} 元"
+        direction_text, direction_color = direction_map.get(
+            data.get("direction", "").lower(), ("未知", "#ffffff")
         )
-        self.direction_amount_label.setStyleSheet(f"color: {direction_color}; font-weight: bold;")
 
-        # 配方
-        self.recipe_label.setText(recipe or "等待生成配方...")
+        # 基本資訊
+        strategy = data.get("strategy", "未知")
+        amount = data.get("amount", 0)
+        current_layer = data.get("current_layer", 0)
+        total_layers = data.get("total_layers", 0)
+        round_id = data.get("round_id", "N/A")
 
-    def set_recipe_steps(self, steps: list) -> None:
+        info_text = (
+            f"<b>策略:</b> {strategy}<br>"
+            f"<b>方向:</b> <span style='color:{direction_color};font-weight:bold;'>{direction_text}</span><br>"
+            f"<b>金額:</b> {amount} 元<br>"
+            f"<b>層數:</b> 第 {current_layer}/{total_layers} 層<br>"
+            f"<b>局號:</b> <span style='color:#9ca3af;font-size:8px;'>{round_id}</span>"
+        )
+        self.result_info_label.setText(info_text)
+
+        # 計算影響預測
+        sequence = data.get("sequence", [])
+        on_win = data.get("on_win", "RESET")
+        on_loss = data.get("on_loss", "ADVANCE")
+
+        # 獲勝影響
+        if on_win == "RESET":
+            win_amount = sequence[0] if sequence else 0
+            win_impact = f"重置到第1層 (下注 <b>{win_amount}</b> 元)"
+        else:
+            win_next_layer = min(current_layer + 1, total_layers)
+            win_amount = sequence[win_next_layer - 1] if win_next_layer <= len(sequence) else "上限"
+            win_impact = f"前進到第{win_next_layer}層 (下注 <b>{win_amount}</b> 元)"
+
+        # 失敗影響
+        if on_loss == "ADVANCE":
+            loss_next_layer = min(current_layer + 1, total_layers)
+            loss_amount = sequence[loss_next_layer - 1] if loss_next_layer <= len(sequence) else "上限"
+            loss_impact = f"前進到第{loss_next_layer}層 (下注 <b>{loss_amount}</b> 元)"
+        else:
+            loss_amount = sequence[0] if sequence else 0
+            loss_impact = f"重置到第1層 (下注 <b>{loss_amount}</b> 元)"
+
+        impact_text = (
+            f"<span style='color:#10b981;'>✅ 獲勝</span> → {win_impact}<br>"
+            f"<span style='color:#ef4444;'>❌ 失敗</span> → {loss_impact}<br>"
+            f"<span style='color:#6b7280;'>➖ 和局</span> → 層數不變 (繼續下注 <b>{amount}</b> 元)"
+        )
+        self.result_impact_label.setText(impact_text)
+
+        # 啟動閃爍動畫
+        self._start_result_blink()
+
+    def update_result_outcome(self, outcome: str, pnl: float) -> None:
         """
-        設定配方步驟列表
+        更新結果局的開獎結果
 
         Args:
-            steps: 步驟列表，例如 ["1. 點擊 Chip 2 (1K籌碼)", "2. 點擊莊家區域", ...]
+            outcome: "win" | "loss" | "skip"
+            pnl: 盈虧金額
         """
-        if not steps:
-            self.recipe_label.setText("無配方")
-            return
+        # 停止閃爍
+        if hasattr(self, '_result_blink_timer'):
+            self._result_blink_timer.stop()
 
-        recipe_text = "\n".join(steps)
-        self.recipe_label.setText(recipe_text)
+        # 結果映射
+        outcome_map = {
+            "win": ("🎉 獲勝", "#10b981"),
+            "loss": ("😞 失敗", "#ef4444"),
+            "skip": ("➖ 跳過 (和局)", "#6b7280"),
+        }
+        outcome_text, outcome_color = outcome_map.get(
+            outcome.lower(), ("未知", "#ffffff")
+        )
 
-    def clear(self) -> None:
-        """清空下一手詳情（保留策略配置）"""
-        self.table_layer_label.setText("等待檢測下注時機...")
-        self.table_layer_label.setStyleSheet("color: #9ca3af;")
-        self.direction_amount_label.setText("")
-        self.recipe_label.setText("")
+        # 更新標題
+        pnl_sign = "+" if pnl > 0 else ""
+        self.result_header.setText(
+            f"{outcome_text} | 盈虧: <span style='color:{outcome_color};'>{pnl_sign}{pnl:.0f}</span> 元"
+        )
+        self.result_header.setStyleSheet(f"color: {outcome_color}; font-weight: bold;")
 
-    def reload_strategy(self) -> None:
-        """重新載入策略配置"""
-        self._load_strategy()
+        # 固定狀態燈顏色
+        self.result_status_dot.setStyleSheet(f"color: {outcome_color};")
+
+        # 更新邊框顏色
+        self.result_info_label.setStyleSheet(f"""
+            QLabel {{
+                color: #e5e7eb;
+                background-color: #111827;
+                border: 2px solid {outcome_color};
+                border-radius: 4px;
+                padding: 10px;
+            }}
+        """)
+
+        # 3秒後自動隱藏
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(3000, self.hide_result_round)
+
+    def hide_result_round(self) -> None:
+        """隱藏結果局區塊（隱藏整個卡片）"""
+        # 停止閃爍
+        if hasattr(self, '_result_blink_timer'):
+            self._result_blink_timer.stop()
+
+        # 隱藏整個卡片
+        self.setVisible(False)
+        self.result_container.setVisible(False)
+
+        # 重置樣式
+        self.result_header.setText("⏳ 結果局 - 等待開獎")
+        self.result_header.setStyleSheet("color: #fbbf24;")
+        self.result_status_dot.setStyleSheet("color: #fbbf24;")
+        self.result_info_label.setStyleSheet("""
+            QLabel {
+                color: #e5e7eb;
+                background-color: #111827;
+                border: 1px solid #fbbf24;
+                border-radius: 4px;
+                padding: 10px;
+            }
+        """)
+
+    def _start_result_blink(self) -> None:
+        """啟動結果局指示燈閃爍"""
+        from PySide6.QtCore import QTimer
+        timer = QTimer(self)
+        timer.timeout.connect(self._toggle_result_dot)
+        timer.start(800)  # 800ms 閃爍一次
+        self._result_blink_timer = timer
+        self._result_dot_visible = True
+
+    def _toggle_result_dot(self) -> None:
+        """切換指示燈顯示/隱藏"""
+        if not hasattr(self, '_result_dot_visible'):
+            self._result_dot_visible = True
+
+        self._result_dot_visible = not self._result_dot_visible
+        if self._result_dot_visible:
+            self.result_status_dot.setStyleSheet("color: #fbbf24;")
+        else:
+            self.result_status_dot.setStyleSheet("color: transparent;")

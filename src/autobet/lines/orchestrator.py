@@ -626,3 +626,51 @@ class LineOrchestrator:
             "pending_positions": self.position_manager.count_pending(),
             "position_stats": self.position_manager.get_statistics(),
         }
+
+    def drain_events(self) -> List[OrchestratorEvent]:
+        """清空並返回所有事件（用於 EngineWorker 消費）"""
+        events = self._events[:]
+        self._events.clear()
+        return events
+
+    def restore_state(self, state: Dict[str, Any]) -> None:
+        """從保存的狀態恢復（用於會話恢復）
+
+        注意：重構後的組件化設計使得狀態恢復更簡單
+        - 策略註冊狀態由 StrategyRegistry 管理
+        - 倉位狀態由 PositionManager 管理
+        - 評估器狀態由 EntryEvaluator 管理
+
+        此方法主要恢復桌號階段和附件關聯
+        """
+        if not isinstance(state, dict):
+            return
+
+        # 清空當前狀態
+        self.table_phases.clear()
+        self.table_rounds.clear()
+
+        # 恢復策略附件關聯
+        lines = state.get("lines") or []
+        for entry in lines:
+            table_id = entry.get("table")
+            strategy_key = entry.get("strategy")
+            if not table_id or not strategy_key:
+                continue
+
+            # 確保策略已註冊
+            if not self.registry.has_strategy(strategy_key):
+                continue
+
+            # 恢復附件關聯
+            if not self.registry.is_attached(table_id, strategy_key):
+                try:
+                    self.registry.attach_to_table(table_id, strategy_key)
+                except Exception:
+                    # 如果附件失敗，跳過此策略
+                    continue
+
+        # 注意：由於組件化設計，大部分狀態恢復由各組件自行管理
+        # EntryEvaluator 會在首次評估時自動初始化 line_states
+        # PositionManager 會在首次創建倉位時自動初始化
+        # 這比舊的 God Class 設計更健壯

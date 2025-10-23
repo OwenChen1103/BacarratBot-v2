@@ -122,6 +122,13 @@ class RiskCoordinator(RiskCoordinatorProtocol):
                outcome: LayerOutcome, metadata: Dict) -> List:
         return []
 
+    def snapshot(self) -> Dict[str, Any]:
+        """獲取風控狀態快照（用於 EngineWorker）"""
+        return {
+            "blocked_count": len(self._blocked),
+            "blocked_strategies": list(self._blocked)
+        }
+
 
 class LineOrchestrator:
     """重構後的 LineOrchestrator
@@ -674,3 +681,14 @@ class LineOrchestrator:
         # EntryEvaluator 會在首次評估時自動初始化 line_states
         # PositionManager 會在首次創建倉位時自動初始化
         # 這比舊的 God Class 設計更健壯
+
+    @property
+    def line_states(self) -> Dict[str, Dict[str, Any]]:
+        """委託給 EntryEvaluator 的 line_states（用於 EngineWorker 兼容性）
+
+        注意：這是一個兼容性屬性，用於支持 EngineWorker 訪問 line_states
+        實際狀態由 EntryEvaluator 管理
+        """
+        if self.entry_evaluator:
+            return self.entry_evaluator.line_states
+        return {}

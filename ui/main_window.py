@@ -19,6 +19,7 @@ from .pages.page_sessions import SessionsPage
 from .pages.page_settings import SettingsPage
 from .pages.page_live_monitor import LiveMonitorPage
 from .pages.page_result_detection import PageResultDetection
+from .widgets.compact_monitor_window import CompactMonitorWindow
 from .app_state import APP_STATE
 from .components.toast import show_toast
 from .dialogs.setup_wizard import SetupWizard
@@ -48,7 +49,7 @@ class MainWindow(QMainWindow):
         # 狀態列
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status_label = QLabel("🔌 準備就緒（預設乾跑）")
+        self.status_label = QLabel("準備就緒（預設乾跑）")
         self.status.addPermanentWidget(self.status_label)
 
         # 頁面註冊
@@ -74,9 +75,12 @@ class MainWindow(QMainWindow):
         # self.add_page("live_monitor", LiveMonitorPage(), "即時監控")  # 隱藏：已整合到Dashboard
         # self.add_page("events", EventsPage(), "事件來源")  # 暫時移除，直接使用 overlay 檢測
         self.add_page("sessions", SessionsPage(), "記錄回放")
-        # self.add_page("settings", SettingsPage(), "系統設定")  # 隱藏：很少使用
+        self.add_page("settings", SettingsPage(), "系統設定")
 
         self.nav.setCurrentRow(0)
+
+        # 精簡監控視窗（初始隱藏）
+        self.compact_monitor = None
 
         # 選單（最少可用）
         self._build_menu()
@@ -92,10 +96,20 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self):
         menubar = self.menuBar()
+
+        # 檔案選單
         file_menu = menubar.addMenu("檔案")
         act_quit = QAction("離開", self)
         act_quit.triggered.connect(self.close)
         file_menu.addAction(act_quit)
+
+        # 視窗選單
+        view_menu = menubar.addMenu("視窗")
+        self.act_compact_monitor = QAction("精簡監控視窗", self)
+        self.act_compact_monitor.setCheckable(True)
+        self.act_compact_monitor.setShortcut("F9")
+        self.act_compact_monitor.triggered.connect(self.toggle_compact_monitor)
+        view_menu.addAction(self.act_compact_monitor)
 
     def add_page(self, key: str, widget: QWidget, label: str):
         self.pages[key] = widget
@@ -260,3 +274,68 @@ class MainWindow(QMainWindow):
                 json.dump(settings, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"儲存設定失敗: {e}")
+
+    def toggle_compact_monitor(self, checked: bool):
+        """切換精簡監控視窗（F9 快捷鍵）"""
+        if checked:
+            if not self.compact_monitor:
+                # 創建精簡監控視窗
+                self.compact_monitor = CompactMonitorWindow()
+                self.compact_monitor.emergency_stop_clicked.connect(self._on_compact_emergency_stop)
+                self.compact_monitor.show_main_window_clicked.connect(self._on_show_main_from_compact)
+
+                # 連接 Dashboard 的狀態更新信號
+                if "dashboard" in self.pages:
+                    dashboard = self.pages["dashboard"]
+
+                    # 狀態更新
+                    dashboard.compact_status_updated.connect(
+                        self.compact_monitor.update_status
+                    )
+
+                    # 策略資訊更新
+                    dashboard.compact_strategy_updated.connect(
+                        self.compact_monitor.update_strategy
+                    )
+
+                    # 盈虧更新
+                    dashboard.compact_pnl_updated.connect(
+                        self.compact_monitor.update_pnl
+                    )
+
+                    # 下注狀態更新
+                    dashboard.compact_bet_status_updated.connect(
+                        self.compact_monitor.update_bet_status
+                    )
+
+                    # 歷史記錄更新
+                    print("[MainWindow] Connecting compact_history_updated signal to compact_monitor.update_history")
+                    dashboard.compact_history_updated.connect(
+                        self.compact_monitor.update_history
+                    )
+                    print("[MainWindow] Signal connected successfully")
+
+                    # 警告訊息
+                    dashboard.compact_warning.connect(
+                        self.compact_monitor.show_warning
+                    )
+                    dashboard.compact_warning_clear.connect(
+                        self.compact_monitor.hide_warning
+                    )
+
+            self.compact_monitor.show()
+        else:
+            if self.compact_monitor:
+                self.compact_monitor.hide()
+
+    def _on_compact_emergency_stop(self):
+        """從精簡視窗觸發緊急停止"""
+        if "dashboard" in self.pages:
+            dashboard = self.pages["dashboard"]
+            dashboard.stop_engine()  # 停止引擎
+
+    def _on_show_main_from_compact(self):
+        """從精簡視窗顯示主視窗"""
+        self.show()
+        self.raise_()
+        self.activateWindow()

@@ -333,10 +333,25 @@ class AutoBetEngine:
                 chip_value = self._parse_chip_value(action)
                 if chip_value:
                     self.act.click_chip_value(chip_value)
+                    # 籌碼之間添加額外延遲（只在真實模式下）
+                    if not self.dry and i < len(sequence) - 1 and sequence[i + 1].startswith("chip_"):
+                        delay_range = self.ui.get("click", {}).get("between_chip_delay_ms", [400, 700])
+                        delay = random.randint(int(delay_range[0]), int(delay_range[1])) / 1000.0
+                        time.sleep(delay)
             elif action in ["banker", "player", "tie"]:
                 self.act.click_bet(action)
+                # 點擊下注按鈕後添加額外延遲（等待遊戲反應）
+                if not self.dry:
+                    delay_range = self.ui.get("click", {}).get("after_bet_button_delay_ms", [500, 800])
+                    delay = random.randint(int(delay_range[0]), int(delay_range[1])) / 1000.0
+                    time.sleep(delay)
             elif action == "confirm":
                 self.act.confirm()
+                # 確認按鈕後添加額外延遲
+                if not self.dry:
+                    delay_range = self.ui.get("click", {}).get("after_confirm_delay_ms", [300, 500])
+                    delay = random.randint(int(delay_range[0]), int(delay_range[1])) / 1000.0
+                    time.sleep(delay)
             elif action == "cancel":
                 self.act.cancel()
             else:

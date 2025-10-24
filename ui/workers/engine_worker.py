@@ -347,9 +347,16 @@ class EngineWorker(QThread):
     def _load_real_configs(self) -> bool:
         """載入真實的配置檔案"""
         try:
-            # 載入 UI 配置 (空字典，使用預設值)
-            self.engine.load_ui_config({})
-            self._emit_log("INFO", "Config", "✅ UI 配置載入完成（使用預設值）")
+            # 載入 UI 配置
+            ui_config = {}
+            if os.path.exists("configs/ui_config.json"):
+                with open("configs/ui_config.json", "r", encoding="utf-8") as f:
+                    ui_config = json.load(f)
+                self._emit_log("INFO", "Config", "UI 配置載入成功")
+            else:
+                self._emit_log("WARNING", "Config", "未找到 ui_config.json，使用預設值")
+
+            self.engine.load_ui_config(ui_config)
 
             # 載入 positions.json
             if os.path.exists("configs/positions.json"):
@@ -762,7 +769,9 @@ class EngineWorker(QThread):
                         pnl = settlement.pnl_delta
 
                         # 發送信號
+                        print(f"[EngineWorker] ★★★ Emitting result_settled signal: outcome={outcome_str}, pnl={pnl}")
                         self.result_settled.emit(outcome_str, pnl)
+                        print(f"[EngineWorker] result_settled signal emitted successfully")
                         self._emit_log("INFO", "Engine",
                                       f"📊 result_settled 信號已發送: {outcome_str} PnL={pnl:+.0f} "
                                       f"(strategy={settlement.position.strategy_key})")
@@ -1403,11 +1412,15 @@ class EngineWorker(QThread):
         try:
             # 轉換方向：BetDirection -> target string
             direction_map = {
-                "BANKER": "banker",
+                "B": "banker",
+                "P": "player",
+                "T": "tie",
+                "BANKER": "banker",  # 向後兼容
                 "PLAYER": "player",
                 "TIE": "tie"
             }
             target = direction_map.get(decision.direction.value, decision.direction.value.lower())
+            self._emit_log("DEBUG", "Line", f"🔄 方向轉換: {decision.direction.value} -> {target}")
 
             # 檢查下注期是否開放
             if self._line_orchestrator:
@@ -1490,9 +1503,11 @@ class EngineWorker(QThread):
                             # 點擊下注區
                             bet_desc = f"點擊下注區 {target}"
                             self._emit_log("DEBUG", "Line", f"  [{step_info}] {bet_desc}")
+                            self._emit_log("DEBUG", "Line", f"  [DEBUG] 準備調用 click_bet('{target}')")
                             execution_log.append(("bet", target))
 
                             bet_result = self.engine.act.click_bet(target)
+                            self._emit_log("DEBUG", "Line", f"  [DEBUG] click_bet 返回: {bet_result}")
                             if not bet_result and not is_dry_run:
                                 raise Exception(f"{step_info} 失敗: {bet_desc}")
 

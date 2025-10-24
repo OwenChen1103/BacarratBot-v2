@@ -31,96 +31,147 @@ class CompactStrategyInfoCard(QFrame):
         self._load_strategy()
 
     def _build_ui(self) -> None:
-        """構建 UI"""
-        self.setFrameStyle(QFrame.StyledPanel)
-        self.setStyleSheet(StyleSheet.card(
-            bg_color=Colors.BG_PRIMARY,
-            border_color=Colors.BORDER_DEFAULT,
-            padding=Spacing.PADDING_LG,
-            radius=Spacing.RADIUS_LG
-        ))
+        """構建 UI - 現代設計感版本"""
+        self.setFrameStyle(QFrame.NoFrame)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #1e2128;
+                border: 1px solid #2d3139;
+                border-radius: 10px;
+            }
+        """)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(Spacing.LINE_SPACING_NORMAL)  # 從4px增加到8px
-        layout.setContentsMargins(
-            Spacing.PADDING_LG,
-            Spacing.PADDING_MD,
-            Spacing.PADDING_LG,
-            Spacing.PADDING_MD
-        )
+        layout.setSpacing(12)  # 增加間距，讓內容呼吸
+        layout.setContentsMargins(16, 14, 16, 14)
 
-        # === 第1行：策略名稱 + 狀態徽章 ===
-        line1_container = QHBoxLayout()
-        line1_container.setSpacing(Spacing.MARGIN_SM)
+        # === 標題欄：策略名稱 + 狀態徽章 ===
+        header_container = QHBoxLayout()
+        header_container.setSpacing(12)
 
         self.strategy_title = QLabel(f"{Icons.STRATEGY} 策略資訊")
-        self.strategy_title.setFont(FontStyle.title())
-        self.strategy_title.setStyleSheet(f"color: {Colors.TEXT_CRITICAL}; padding: 4px;")
-        line1_container.addWidget(self.strategy_title)
+        self.strategy_title.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
+        self.strategy_title.setStyleSheet("color: #e5e7eb; background: transparent; border: none;")
+        header_container.addWidget(self.strategy_title)
 
-        line1_container.addStretch()
+        header_container.addStretch()
 
         self.status_badge = QLabel(f"{Icons.IDLE} 待機")
-        self.status_badge.setFont(FontStyle.body_bold())
+        self.status_badge.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
         self._update_status_badge(False)
-        line1_container.addWidget(self.status_badge)
+        header_container.addWidget(self.status_badge)
 
-        layout.addLayout(line1_container)
+        layout.addLayout(header_container)
 
         # === 分隔線 ===
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setStyleSheet(StyleSheet.divider())
-        layout.addWidget(divider)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet("background-color: #2d3139; min-height: 1px; max-height: 1px; border: none;")
+        layout.addWidget(separator)
 
-        # === 第2行：觸發條件 + 序列 ===
+        # === 內容區域 ===
+        # 觸發條件
         self.line2_label = QLabel("載入中...")
-        self.line2_label.setFont(FontStyle.body())
-        self.line2_label.setStyleSheet(f"color: {Colors.TEXT_NORMAL}; padding: 4px;")
+        self.line2_label.setFont(QFont("Microsoft YaHei UI", 10))
+        self.line2_label.setStyleSheet("color: #d1d5db; background: transparent; border: none; padding: 2px 0px;")
         self.line2_label.setWordWrap(True)
         layout.addWidget(self.line2_label)
 
-        # === 第3行：風控設定 ===
+        # 下注序列
         self.line3_label = QLabel("")
-        self.line3_label.setFont(FontStyle.body())
-        self.line3_label.setStyleSheet(f"color: {Colors.TEXT_NORMAL}; padding: 4px;")
+        self.line3_label.setFont(QFont("Microsoft YaHei UI", 10))
+        self.line3_label.setStyleSheet("color: #d1d5db; background: transparent; border: none; padding: 2px 0px;")
         self.line3_label.setWordWrap(True)
         layout.addWidget(self.line3_label)
 
-        # === 第4行：今日統計 ===
+        # 風控設定
         self.line4_label = QLabel("")
-        self.line4_label.setFont(FontStyle.body())
-        self.line4_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; padding: 4px;")
+        self.line4_label.setFont(QFont("Microsoft YaHei UI", 10))
+        self.line4_label.setStyleSheet("color: #d1d5db; background: transparent; border: none; padding: 2px 0px;")
         layout.addWidget(self.line4_label)
 
+        # === 分隔線 ===
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.HLine)
+        separator2.setStyleSheet("background-color: #2d3139; min-height: 1px; max-height: 1px; border: none;")
+        layout.addWidget(separator2)
+
+        # === 底部統計 ===
+        self.line5_label = QLabel("")
+        self.line5_label.setFont(QFont("Microsoft YaHei UI", 9))
+        self.line5_label.setStyleSheet("color: #9ca3af; background: transparent; border: none; padding: 2px 0px;")
+        layout.addWidget(self.line5_label)
+
+        # 填滿剩餘空間
         layout.addStretch()
 
     def _update_status_badge(self, is_running: bool) -> None:
-        """更新狀態徽章"""
+        """更新狀態徽章 - 扁平現代設計"""
         if is_running:
-            icon = Icons.RUNNING
-            text = "運行中"
-            bg_color = Colors.SUCCESS_900
-            border_color = Colors.SUCCESS_500
-            text_color = Colors.SUCCESS_50
+            text = "● 運行中"
+            text_color = "#10b981"
         else:
-            icon = Icons.IDLE
-            text = "待機"
-            bg_color = Colors.GRAY_700
-            border_color = Colors.GRAY_500
-            text_color = Colors.GRAY_300
+            text = "● 待機"
+            text_color = "#6b7280"
 
-        self.status_badge.setText(f"{icon} {text}")
+        self.status_badge.setText(text)
         self.status_badge.setStyleSheet(f"""
             QLabel {{
-                background-color: {bg_color};
+                background-color: transparent;
                 color: {text_color};
-                border: 1px solid {border_color};
-                padding: 3px 10px;
-                border-radius: {Spacing.RADIUS_SM}px;
+                border: none;
+                padding: 4px 8px;
+                border-radius: 4px;
                 font-weight: bold;
             }}
         """)
+
+    def _parse_pattern_to_chinese(self, pattern: str) -> str:
+        """
+        將策略 pattern 轉換成簡潔的中文
+        例如：
+        - "PB then bet P" -> "見 閒莊 → 下 閒"
+        - "BBB then bet P" -> "見 莊莊莊 → 下 閒"
+        """
+        if not pattern or pattern == '未知':
+            return "觸發: 未設定"
+
+        # 字母對應中文（簡潔版，不用 HTML）
+        char_map = {
+            'P': '閒',
+            'B': '莊',
+            'T': '和'
+        }
+
+        try:
+            # 分割 "XXX then bet Y" 格式
+            if 'then bet' in pattern.lower():
+                parts = pattern.split('then bet')
+                trigger_part = parts[0].strip().upper()
+                bet_part = parts[1].strip().upper()
+
+                # 轉換觸發序列
+                trigger_cn = ''.join([char_map.get(c, c) for c in trigger_part])
+
+                # 轉換下注方向，帶顏色
+                bet_char = bet_part[0] if bet_part else '?'
+                bet_cn = char_map.get(bet_char, bet_char)
+
+                # 顏色映射
+                if bet_char == 'P':
+                    color = '#3b82f6'
+                elif bet_char == 'B':
+                    color = '#ef4444'
+                else:
+                    color = '#10b981'
+
+                return f"見 {trigger_cn} → 下 <span style='color: {color}; font-weight: bold;'>{bet_cn}</span>"
+            else:
+                # 如果格式不符，直接顯示原文
+                return f"觸發: {pattern}"
+
+        except Exception as e:
+            return f"觸發: {pattern}"
 
     def _load_strategy(self) -> None:
         """載入策略配置"""
@@ -144,7 +195,7 @@ class CompactStrategyInfoCard(QFrame):
             self.line2_label.setText(f"{Icons.CROSS} 載入失敗: {e}")
 
     def _update_display(self) -> None:
-        """更新顯示"""
+        """更新顯示 - 現代設計感版本"""
         if not self.strategy_data:
             return
 
@@ -153,52 +204,63 @@ class CompactStrategyInfoCard(QFrame):
         staking = self.strategy_data.get('staking', {})
         risk = self.strategy_data.get('risk', {})
 
-        # === 第1行：策略名稱 ===
+        # === 標題：策略名稱 ===
         pattern = entry.get('pattern', '未設定')
-        self.strategy_title.setText(f"{Icons.STRATEGY} 策略 {strategy_key}  {pattern}")
+        self.strategy_title.setText(f"{Icons.STRATEGY} {pattern}")
 
-        # === 第2行：觸發條件 + 序列 + 進層規則 ===
+        # === 觸發條件 ===
+        trigger_desc = self._parse_pattern_to_chinese(pattern)
+        self.line2_label.setText(f"<span style='color: #9ca3af;'>觸發</span>  {trigger_desc}")
+
+        # === 下注序列 ===
         sequence = staking.get('sequence', [])
-        sequence_text = ' → '.join([str(s) for s in sequence])  # 使用更清晰的箭頭
+        if len(sequence) > 0:
+            # 金額用大號字體，醒目顯示
+            seq_parts = []
+            for i, amount in enumerate(sequence):
+                if i == 0:
+                    # 第一層用白色
+                    seq_parts.append(f"<span style='color: #e5e7eb; font-weight: bold; font-size: 11pt;'>{amount}</span>")
+                else:
+                    # 後續層用黃色
+                    seq_parts.append(f"<span style='color: #fbbf24; font-weight: bold; font-size: 11pt;'>{amount}</span>")
 
-        advance_on = staking.get('advance_on', 'loss')
-        advance_text = "輸進層" if advance_on == 'loss' else "贏進層"
+            seq_display = ' → '.join(seq_parts)
+            advance_on = staking.get('advance_on', 'loss')
 
-        reset_on_win = staking.get('reset_on_win', False)
-        reset_text = " / 贏重置" if reset_on_win else ""
+            if advance_on == 'loss':
+                rule = "<span style='color: #ef4444;'>輸進</span>"
+            else:
+                rule = "<span style='color: #10b981;'>贏進</span>"
 
-        # 使用視覺分組而非 | 符號
-        line2 = (
-            f"<span style='color: {Colors.TEXT_IMPORTANT};'>觸發</span>  {pattern}     "
-            f"<span style='color: {Colors.TEXT_IMPORTANT};'>序列</span>  {sequence_text}     "
-            f"<span style='color: {Colors.TEXT_IMPORTANT};'>規則</span>  {advance_text}{reset_text}"
-        )
-        self.line2_label.setText(line2)
-
-        # === 第3行：風控設定 ===
-        levels = risk.get('levels', [])
-        risk_parts = []
-        for level in levels:
-            scope = level.get('scope', '')
-            take_profit = level.get('take_profit')
-            stop_loss = level.get('stop_loss')
-
-            scope_name = {
-                'global_day': '全局',
-                'table': '單桌',
-                'table_strategy': '單策略'
-            }.get(scope, scope)
-
-            tp_text = f"+{int(take_profit)}" if take_profit else "無"
-            sl_text = f"{int(stop_loss)}" if stop_loss else "無"
-            risk_parts.append(f"{scope_name} <b style='color: {Colors.TEXT_IMPORTANT};'>{tp_text} / {sl_text}</b>")
-
-        line3 = f"{Icons.RISK} 風控     " + "     ".join(risk_parts)  # 使用空格分組
+            line3 = f"<span style='color: #9ca3af;'>下注</span>  {seq_display} <span style='color: #9ca3af;'>元</span> · {rule}"
+        else:
+            line3 = "<span style='color: #9ca3af;'>下注</span>  未設定"
         self.line3_label.setText(line3)
 
-        # === 第4行：今日統計（暫時顯示佔位符）===
-        line4 = f"{Icons.STATS} 今日  等待運行數據..."
+        # === 風控 ===
+        levels = risk.get('levels', [])
+        global_risk = None
+        for level in levels:
+            if level.get('scope') == 'global_day':
+                global_risk = level
+                break
+
+        if global_risk:
+            tp = int(global_risk.get('take_profit', 0))
+            sl = int(global_risk.get('stop_loss', 0))
+            line4 = (
+                f"<span style='color: #9ca3af;'>風控</span>  "
+                f"<span style='color: #10b981; font-weight: bold;'>+{tp}</span> "
+                f"<span style='color: #6b7280;'>/</span> "
+                f"<span style='color: #ef4444; font-weight: bold;'>{sl}</span>"
+            )
+        else:
+            line4 = "<span style='color: #9ca3af;'>風控</span>  未設定"
         self.line4_label.setText(line4)
+
+        # === 今日統計 ===
+        self.line5_label.setText("<span style='color: #6b7280;'>今日</span>  0 觸發 · 0 勝 0 負 · 0 元")
 
     def update_stats(self, snapshot: Dict[str, Any]) -> None:
         """
@@ -212,16 +274,7 @@ class CompactStrategyInfoCard(QFrame):
 
         performance = snapshot.get("performance", {})
         if not performance:
-            # ✅ 即使沒有 performance 數據，也顯示初始狀態（避免一直顯示"等待運行數據..."）
-            self.line4_label.setText(
-                f"{Icons.STATS} 今日  "
-                f"<span style='color: {Colors.TEXT_IMPORTANT};'>0</span> 觸發  "
-                f"<span style='color: {Colors.TEXT_IMPORTANT};'>0</span> 進場  "
-                f"<span style='color: {Colors.SUCCESS_500};'>0</span>勝 "
-                f"<span style='color: {Colors.ERROR_500};'>0</span>負  "
-                f"<b style='color: {Colors.TEXT_MUTED}; font-family: {FontStyle.FAMILY_MONO};'>0</b>元  "
-                f"<span style='color: {Colors.TEXT_MUTED};'>(0%)</span>"
-            )
+            self.line5_label.setText("<span style='color: #6b7280;'>今日</span>  0 觸發 · 0 勝 0 負 · 0 元")
             return
 
         triggers = performance.get("triggers", 0)
@@ -230,47 +283,34 @@ class CompactStrategyInfoCard(QFrame):
         losses = performance.get("losses", 0)
         total_pnl = performance.get("total_pnl", 0.0)
 
-        # 計算勝率
-        total_games = wins + losses
-        win_rate = (wins / total_games * 100) if total_games > 0 else 0
-
         # 格式化盈虧顏色
-        pnl_color = Colors.pnl_color(total_pnl)
-        pnl_sign = "+" if total_pnl > 0 else ""
+        if total_pnl > 0:
+            pnl_color = "#10b981"
+            pnl_sign = "+"
+        elif total_pnl < 0:
+            pnl_color = "#ef4444"
+            pnl_sign = ""
+        else:
+            pnl_color = "#9ca3af"
+            pnl_sign = ""
 
-        # 使用等寬字體和顏色標籤顯示數字
-        line4 = (
-            f"{Icons.STATS} 今日  "
-            f"<span style='color: {Colors.TEXT_IMPORTANT};'>{triggers}</span> 觸發  "
-            f"<span style='color: {Colors.TEXT_IMPORTANT};'>{entries}</span> 進場  "
-            f"<span style='color: {Colors.SUCCESS_500};'>{wins}</span>勝 "
-            f"<span style='color: {Colors.ERROR_500};'>{losses}</span>負  "
-            f"<b style='color: {pnl_color}; font-family: {FontStyle.FAMILY_MONO};'>{pnl_sign}{total_pnl:.0f}</b>元  "
-            f"<span style='color: {Colors.TEXT_MUTED};'>({win_rate:.0f}%)</span>"
+        # 現代統計顯示
+        line5 = (
+            f"<span style='color: #6b7280;'>今日</span>  "
+            f"{triggers} 觸發 · "
+            f"<span style='color: #10b981;'>{wins}</span> 勝 "
+            f"<span style='color: #ef4444;'>{losses}</span> 負 · "
+            f"<span style='color: {pnl_color}; font-weight: bold;'>{pnl_sign}{total_pnl:.0f}</span> 元"
         )
-        self.line4_label.setText(line4)
+        self.line5_label.setText(line5)
 
     def set_status(self, is_running: bool) -> None:
         """
-        設定運行狀態
+        設定運行狀態（只更新徽章，不改變卡片大小和樣式）
 
         Args:
             is_running: 是否運行中
         """
         self.is_running = is_running
         self._update_status_badge(is_running)
-
-        # 更新卡片邊框顏色
-        if is_running:
-            border_color = Colors.SUCCESS_500
-            bg_color = Colors.BG_PRIMARY
-        else:
-            border_color = Colors.BORDER_DEFAULT
-            bg_color = Colors.BG_PRIMARY
-
-        self.setStyleSheet(StyleSheet.card(
-            bg_color=bg_color,
-            border_color=border_color,
-            padding=Spacing.PADDING_LG,
-            radius=Spacing.RADIUS_LG
-        ))
+        # ✅ 不再改變卡片樣式，保持統一的外觀

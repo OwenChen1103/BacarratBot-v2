@@ -117,11 +117,25 @@ class Colors:
     # === 背景色彩 ===
     BG_PRIMARY = GRAY_700      # 卡片主背景（#374151）
     BG_SECONDARY = GRAY_800    # 次要背景（#1f2937）
+    BG_TERTIARY = "#1b2536"    # 第三層背景（頁面底色）
+    BG_ELEVATED = "#243047"    # 抬高元素背景（GroupBox）
     BG_HOVER = "#3f4956"       # 懸停背景
+    BG_INPUT = GRAY_800        # 輸入框背景（#1f2937）
 
     # === 邊框色彩 ===
     BORDER_DEFAULT = GRAY_600  # 預設邊框（#4b5563）
     BORDER_HOVER = GRAY_500    # 懸停邊框（#6b7280）
+    BORDER_ELEVATED = "#31415c"  # 抬高元素邊框（GroupBox）
+    BORDER_FOCUS = INFO_500    # 聚焦邊框（#3b82f6）
+
+    # === 主題色彩（Primary/Secondary/Accent）===
+    PRIMARY_500 = "#2563eb"    # 主色調（按鈕、選中狀態）
+    PRIMARY_600 = "#1d4ed8"    # 主色調暗
+    PRIMARY_700 = "#1e40af"    # 主色調更暗
+    SECONDARY_500 = "#0e7490"  # 次要色調
+    SECONDARY_600 = "#0c5f75"  # 次要色調暗
+    ACCENT_500 = "#7c3aed"     # 強調色（特殊按鈕）
+    ACCENT_600 = "#6d28d9"     # 強調色暗
 
     # === 狀態背景色（帶透明度）===
     @staticmethod
@@ -205,40 +219,40 @@ class Spacing:
 # ============================================================
 
 class Icons:
-    """統一的圖示定義"""
+    """統一的圖示定義（使用簡潔符號替代 emoji）"""
 
     # === 狀態圖示 ===
-    IDLE = "⏸️"
-    WAITING = "⏳"
-    READY = "🎯"
-    RUNNING = "▶️"
-    PAUSED = "⏸"
-    STOPPED = "⏹️"
+    IDLE = "◼"
+    WAITING = "●"
+    READY = "◉"
+    RUNNING = "▶"
+    PAUSED = "‖"
+    STOPPED = "■"
 
     # === 資料類型 ===
-    STRATEGY = "📊"
-    RISK = "🛡️"
-    MONEY = "💰"
-    STATS = "📈"
-    ROADMAP = "🎲"
-    CALENDAR = "📅"
+    STRATEGY = "◆"
+    RISK = "▲"
+    MONEY = "¥"
+    STATS = "▪"
+    ROADMAP = "□"
+    CALENDAR = "▫"
 
     # === 方向 ===
-    BANKER = "🔴"
-    PLAYER = "⚪"
-    TIE = "🟢"
+    BANKER = "B"
+    PLAYER = "P"
+    TIE = "T"
 
     # === 結果 ===
-    WIN = "✅"
-    LOSS = "❌"
-    ALERT = "⚠️"
-    CHECK = "✔"
-    CROSS = "✖"
+    WIN = "√"
+    LOSS = "×"
+    ALERT = "!"
+    CHECK = "✓"
+    CROSS = "✗"
 
     # === 趨勢 ===
-    UP = "⬆"
-    DOWN = "⬇"
-    NEUTRAL = "➡"
+    UP = "↑"
+    DOWN = "↓"
+    NEUTRAL = "→"
 
 
 # ============================================================
@@ -301,24 +315,39 @@ class StyleSheet:
 
     @staticmethod
     def progress_bar() -> str:
-        """生成進度條樣式"""
-        return """
-            QProgressBar {
-                border: 1px solid #4b5563;
-                border-radius: 4px;
-                background-color: #1f2937;
-                height: 18px;
+        """生成進度條樣式（綠色漸變，進度越高越好）"""
+        return f"""
+            QProgressBar {{
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: {Spacing.RADIUS_SM}px;
+                background-color: {Colors.BG_SECONDARY};
+                height: 20px;
                 text-align: center;
-                color: #f3f4f6;
+                color: {Colors.TEXT_CRITICAL};
                 font-size: 8pt;
-            }
-            QProgressBar::chunk {
+                font-weight: bold;
+            }}
+            QProgressBar::chunk {{
                 background-color: qlineargradient(
                     x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #f59e0b, stop:1 #ef4444
+                    stop:0 {Colors.SUCCESS_700}, stop:1 {Colors.SUCCESS_500}
                 );
-                border-radius: 3px;
-            }
+                border-radius: {Spacing.RADIUS_SM - 1}px;
+            }}
+        """
+
+    @staticmethod
+    def info_box(border_color: str = Colors.BORDER_DEFAULT,
+                 bg_color: str = Colors.BG_SECONDARY) -> str:
+        """生成資訊框樣式（用於顯示詳細資訊）"""
+        return f"""
+            QLabel {{
+                color: {Colors.TEXT_IMPORTANT};
+                background-color: {bg_color};
+                border: 1px solid {border_color};
+                border-radius: {Spacing.RADIUS_MD}px;
+                padding: {Spacing.PADDING_MD}px;
+            }}
         """
 
     @staticmethod
@@ -329,5 +358,173 @@ class StyleSheet:
                 background-color: {Colors.BORDER_DEFAULT};
                 max-height: 1px;
                 margin: 6px 0px;
+            }}
+        """
+
+    @staticmethod
+    def button_primary() -> str:
+        """主要按鈕樣式（藍色）"""
+        return f"""
+            QPushButton {{
+                background-color: {Colors.PRIMARY_500};
+                color: white;
+                border: none;
+                border-radius: {Spacing.RADIUS_MD}px;
+                padding: {Spacing.PADDING_SM}px {Spacing.PADDING_LG}px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.PRIMARY_600};
+            }}
+            QPushButton:pressed {{
+                background-color: {Colors.PRIMARY_700};
+            }}
+            QPushButton:disabled {{
+                background-color: {Colors.GRAY_600};
+                color: {Colors.TEXT_DISABLED};
+            }}
+        """
+
+    @staticmethod
+    def button_secondary() -> str:
+        """次要按鈕樣式（青色）"""
+        return f"""
+            QPushButton {{
+                background-color: {Colors.SECONDARY_500};
+                color: white;
+                border: none;
+                border-radius: {Spacing.RADIUS_MD}px;
+                padding: {Spacing.PADDING_SM}px {Spacing.PADDING_LG}px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.SECONDARY_600};
+            }}
+        """
+
+    @staticmethod
+    def button_accent() -> str:
+        """強調按鈕樣式（紫色）"""
+        return f"""
+            QPushButton {{
+                background-color: {Colors.ACCENT_500};
+                color: white;
+                border: none;
+                border-radius: {Spacing.RADIUS_MD}px;
+                padding: {Spacing.PADDING_SM}px {Spacing.PADDING_LG}px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.ACCENT_600};
+            }}
+        """
+
+    @staticmethod
+    def button_ghost() -> str:
+        """幽靈按鈕樣式（透明背景）"""
+        return f"""
+            QPushButton {{
+                background-color: {Colors.BG_INPUT};
+                color: {Colors.TEXT_CRITICAL};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: {Spacing.RADIUS_MD}px;
+                padding: {Spacing.PADDING_SM}px {Spacing.PADDING_MD}px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BG_HOVER};
+                border-color: {Colors.BORDER_HOVER};
+            }}
+        """
+
+    @staticmethod
+    def input_field() -> str:
+        """輸入框樣式（LineEdit, SpinBox, ComboBox）"""
+        return f"""
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+                background-color: {Colors.BG_INPUT};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: {Spacing.RADIUS_SM}px;
+                padding: {Spacing.PADDING_SM}px;
+                color: {Colors.TEXT_IMPORTANT};
+            }}
+            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+                border-color: {Colors.BORDER_FOCUS};
+            }}
+            QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{
+                background-color: {Colors.GRAY_700};
+                color: {Colors.TEXT_DISABLED};
+            }}
+        """
+
+    @staticmethod
+    def group_box() -> str:
+        """GroupBox 樣式"""
+        return f"""
+            QGroupBox {{
+                background-color: {Colors.BG_ELEVATED};
+                border: 1px solid {Colors.BORDER_ELEVATED};
+                border-radius: {Spacing.RADIUS_LG}px;
+                margin-top: {Spacing.PADDING_LG + 4}px;
+                padding-top: {Spacing.PADDING_MD + 6}px;
+                font-weight: bold;
+                color: {Colors.TEXT_IMPORTANT};
+                font-size: 10.5pt;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: {Spacing.PADDING_MD}px;
+                padding: 0 {Spacing.PADDING_SM}px;
+                background-color: transparent;
+            }}
+        """
+
+    @staticmethod
+    def list_widget() -> str:
+        """ListWidget 樣式"""
+        return f"""
+            QListWidget {{
+                background-color: {Colors.BG_INPUT};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                color: {Colors.TEXT_CRITICAL};
+                border-radius: {Spacing.RADIUS_LG}px;
+            }}
+            QListWidget::item {{
+                padding: {Spacing.PADDING_SM}px;
+            }}
+            QListWidget::item:selected {{
+                background-color: {Colors.PRIMARY_500};
+                color: white;
+            }}
+            QListWidget::item:hover {{
+                background-color: {Colors.BG_HOVER};
+            }}
+        """
+
+    @staticmethod
+    def tab_widget() -> str:
+        """TabWidget 樣式"""
+        return f"""
+            QTabWidget::pane {{
+                border: 2px solid {Colors.BORDER_DEFAULT};
+                border-radius: {Spacing.RADIUS_MD}px;
+                background-color: {Colors.BG_PRIMARY};
+                padding: {Spacing.PADDING_MD}px;
+            }}
+            QTabBar::tab {{
+                background-color: {Colors.BG_INPUT};
+                color: {Colors.TEXT_MUTED};
+                padding: {Spacing.PADDING_MD}px {Spacing.PADDING_LG + 4}px;
+                border-top-left-radius: {Spacing.RADIUS_MD}px;
+                border-top-right-radius: {Spacing.RADIUS_MD}px;
+                margin-right: {Spacing.MARGIN_XS}px;
+                font-size: 11pt;
+                min-width: 100px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {Colors.PRIMARY_500};
+                color: white;
+                font-weight: bold;
+            }}
+            QTabBar::tab:hover {{
+                background-color: {Colors.BG_HOVER};
             }}
         """

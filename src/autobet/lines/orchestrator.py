@@ -686,11 +686,16 @@ class LineOrchestrator:
                     current_layer = state.armed_count
                     max_layer = 3  # 預設最大層級
                     stake = 0.0  # TODO: 從 PositionManager 獲取實際賭注
+                    next_stake = 0.0  # 下一層金額
 
                     if strategy_def and strategy_def.staking:
                         max_layer = len(strategy_def.staking.sequence)
                         if current_layer > 0 and current_layer <= len(strategy_def.staking.sequence):
                             stake = float(strategy_def.staking.sequence[current_layer - 1])
+
+                        # 計算下一層金額
+                        if current_layer < max_layer:
+                            next_stake = float(strategy_def.staking.sequence[current_layer])
 
                     lines.append({
                         "table": table_id,
@@ -703,6 +708,7 @@ class LineOrchestrator:
                         "current_layer": current_layer,
                         "max_layer": max_layer,
                         "stake": stake,
+                        "next_stake": next_stake,
                     })
 
         # ✅ 生成 UI 兼容的 "risk" 格式（PnL 顯示）

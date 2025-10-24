@@ -22,8 +22,8 @@
   },
   "roi": {
     "overlay": {
-      "x": 900,
-      "y": 573,
+      "x": 901,
+      "y": 572,
       "w": 124,
       "h": 35
     },
@@ -71,7 +71,7 @@
     ],
     "timer_interval_ms": 120,
     "template_paths": {
-      "qing": "C:/Users/owen9/Pictures/Screenshots/Screenshot 2025-10-23 134820.png",
+      "qing": "C:/Users/owen9/Pictures/Screenshots/Screenshot 2025-10-23 122354.png",
       "jie": null,
       "fa": null
     },

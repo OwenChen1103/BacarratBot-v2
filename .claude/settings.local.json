@@ -16,7 +16,8 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git stash:*)",
-      "Bash(del test_new_methods.py)"
+      "Bash(del test_new_methods.py)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

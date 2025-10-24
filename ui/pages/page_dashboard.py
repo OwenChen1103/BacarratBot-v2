@@ -46,7 +46,7 @@ class NoWheelComboBox(QComboBox):
 
 class StatusCard(QFrame):
     """狀態卡片"""
-    def __init__(self, title: str, icon: str = "📊"):
+    def __init__(self, title: str, icon: str = "◆"):
         super().__init__()
         self.title = title
         self.icon = icon
@@ -172,7 +172,7 @@ class ResultCard(QFrame):
         layout.setContentsMargins(6, 6, 6, 6)
 
         header_layout = QHBoxLayout()
-        icon = QLabel("🎲")
+        icon = QLabel("□")
         icon.setFont(QFont("Segoe UI Emoji", 10))
         header_layout.addWidget(icon)
 
@@ -342,34 +342,34 @@ class ResultsHistoryCard(QFrame):
         self._setup_ui()
 
     def _setup_ui(self):
-        self.setFrameStyle(QFrame.StyledPanel)
+        self.setFrameStyle(QFrame.NoFrame)
         self.setStyleSheet("""
             QFrame {
-                background-color: #1f2937;
-                border: 1px solid #374151;
+                background-color: #252930;
+                border: none;
                 border-radius: 8px;
-                padding: 12px;
             }
         """)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(16, 12, 16, 12)
 
         # 標題
         header_layout = QHBoxLayout()
-        icon = QLabel("🎲")
+        icon = QLabel("□")
         icon.setFont(QFont("Segoe UI Emoji", 12))
+        icon.setStyleSheet("color: #ffffff; background: transparent; border: none;")
         header_layout.addWidget(icon)
 
-        title = QLabel("開獎結果歷史")
-        title.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
-        title.setStyleSheet("color: #f9fafb;")
+        title = QLabel("開獎結果")
+        title.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
+        title.setStyleSheet("color: #ffffff; background: transparent; border: none;")
         header_layout.addWidget(title)
 
         # 統計信息
         self.stats_label = QLabel("共 0 局")
-        self.stats_label.setStyleSheet("color: #9ca3af; font-size: 9pt;")
+        self.stats_label.setStyleSheet("color: #8b92a0; font-size: 8pt; background: transparent; border: none;")
         header_layout.addStretch()
         header_layout.addWidget(self.stats_label)
 
@@ -477,7 +477,7 @@ class ResultsHistoryCard(QFrame):
         layout.addWidget(index_label)
 
         # 結果圖標和文字
-        result_label = QLabel(f"🎲 {label}")
+        result_label = QLabel(f"□ {label}")
         result_label.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
         result_label.setStyleSheet(f"color: {text_color}; background: transparent;")
         layout.addWidget(result_label)
@@ -828,7 +828,7 @@ class ClickSequenceCard(QFrame):
         layout = QVBoxLayout(self)
 
         # 標題
-        title = QLabel("🎯 點擊順序設定")
+        title = QLabel("◉ 點擊順序設定")
         title.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
         layout.addWidget(title)
 
@@ -1116,7 +1116,7 @@ class StatsCard(QFrame):
 
         layout = QVBoxLayout(self)
 
-        title = QLabel("📊 會話統計")
+        title = QLabel("▪ 會話統計")
         title.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
         layout.addWidget(title)
 
@@ -1184,6 +1184,15 @@ class DashboardPage(QWidget):
     """實戰主控台頁面"""
     navigate_to = Signal(str)
 
+    # 精簡監控視窗信號
+    compact_status_updated = Signal(str, str, str)  # (mode, mode_text, detection_text)
+    compact_strategy_updated = Signal(str, str, str, str, int, int, float)  # (strategy_name, table, round_id, status, current_layer, max_layer, next_stake)
+    compact_pnl_updated = Signal(float, int, int, int)  # (pnl, wins, losses, total)
+    compact_bet_status_updated = Signal(str, dict)  # (status, data)
+    compact_history_updated = Signal(list)  # (history) - list of {"winner": "banker/player/tie"}
+    compact_warning = Signal(str)  # (warning_message) - 顯示警告
+    compact_warning_clear = Signal()  # 清除警告
+
     def __init__(self):
         super().__init__()
         self.engine_worker = None
@@ -1199,6 +1208,16 @@ class DashboardPage(QWidget):
         self.latest_results: Dict[str, Dict[str, Any]] = {}
         self.line_summary: Dict[str, Any] = {}
         self.selected_result_table: Optional[str] = None
+
+        # 精簡監控視窗數據追蹤
+        self.compact_session_pnl = 0.0
+        self.compact_wins = 0
+        self.compact_losses = 0
+        self.compact_total_rounds = 0
+        self.compact_history = []  # [{direction, outcome}, ...]
+        self.compact_current_bet = {}  # 當前下注資訊
+        self.current_mode = "idle"  # 當前模式: idle/simulate/battle
+        self.current_mode_text = "待機"  # 當前模式顯示文字
 
         self.setup_ui()
         self.setup_engine()
@@ -1221,7 +1240,7 @@ class DashboardPage(QWidget):
         layout.setSpacing(8)
 
         # 標題
-        title = QLabel("🎯 策略系統狀態")
+        title = QLabel("◉ 策略系統狀態")
         title.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
         layout.addWidget(title)
 
@@ -1248,7 +1267,7 @@ class DashboardPage(QWidget):
     def update_strategy_status_display(self, summary):
         """更新策略狀態顯示（已廢棄 - 使用 CompactStrategyInfoCard.update_stats）"""
         if not summary:
-            self.strategy_status_label.setText("⚪ 策略系統未啟動")
+            self.strategy_status_label.setText("○ 策略系統未啟動")
             self.strategy_status_label.setStyleSheet("""
                 QLabel {
                     background-color: #374151;
@@ -1278,18 +1297,18 @@ class DashboardPage(QWidget):
 
         # 判斷狀態
         if active_count > 0:
-            status_text = f"🟢 運行中 ({active_count} 個活躍)"
+            status_text = f"● 運行中 ({active_count} 個活躍)"
             status_color = "#10b981"
             border_color = "#10b981"
         elif len(lines) > 0:
             if num_strategies == 1:
-                status_text = f"🟡 待機中 (1 個策略監控 {num_tables} 個桌台)"
+                status_text = f"○ 待機中 (1 個策略監控 {num_tables} 個桌台)"
             else:
-                status_text = f"🟡 待機中 ({num_strategies} 個策略監控 {num_tables} 個桌台)"
+                status_text = f"○ 待機中 ({num_strategies} 個策略監控 {num_tables} 個桌台)"
             status_color = "#f59e0b"
             border_color = "#f59e0b"
         else:
-            status_text = "⚪ 無策略運行"
+            status_text = "○ 無策略運行"
             status_color = "#6b7280"
             border_color = "#6b7280"
 
@@ -1308,7 +1327,7 @@ class DashboardPage(QWidget):
         # 詳細信息
         details = []
         if frozen_count > 0:
-            details.append(f"⚠️ {frozen_count} 個策略已凍結")
+            details.append(f"! {frozen_count} 個策略已凍結")
         details.append(f"總 PnL: {total_pnl:+.2f}")
         details.append(f"可用資金: {capital.get('bankroll_free', 0):.0f}/{capital.get('bankroll_total', 0):.0f}")
 
@@ -1397,9 +1416,9 @@ class DashboardPage(QWidget):
         self.results_history_card = ResultsHistoryCard()
         tab3_layout.addWidget(self.results_history_card)
 
-        tabs.addTab(tab1, "📊 策略資訊")
-        tabs.addTab(tab2, "🎮 即時狀態")
-        tabs.addTab(tab3, "🎲 開獎結果")
+        tabs.addTab(tab1, "策略資訊")
+        tabs.addTab(tab2, "即時狀態")
+        tabs.addTab(tab3, "開獎結果")
 
         right_layout.addWidget(tabs, 1)  # 給予彈性空間
 
@@ -1428,9 +1447,9 @@ class DashboardPage(QWidget):
         # 狀態卡片行
         status_row = QHBoxLayout()
         status_row.setSpacing(8)
-        self.state_card = StatusCard("引擎狀態", "🤖")
-        self.mode_card = StatusCard("運行模式", "🧪")
-        self.detection_card = StatusCard("檢測狀態", "🎯")
+        self.state_card = StatusCard("引擎狀態", "▶")
+        self.mode_card = StatusCard("運行模式", "■")
+        self.detection_card = StatusCard("檢測狀態", "◉")
         self.result_card = ResultCard()
         status_row.addWidget(self.state_card, 1)
         status_row.addWidget(self.mode_card, 1)
@@ -1444,7 +1463,7 @@ class DashboardPage(QWidget):
         button_layout.setSpacing(8)
 
         # 模擬實戰按鈕
-        self.simulate_btn = QPushButton("🎯 模擬實戰")
+        self.simulate_btn = QPushButton("模擬實戰")
         self.simulate_btn.setStyleSheet("""
             QPushButton {
                 background-color: #0284c7;
@@ -1560,12 +1579,12 @@ class DashboardPage(QWidget):
             self.log_viewer.add_log("ERROR", "Dashboard", "引擎初始化失敗")
 
         # 設定初始狀態
-        self.mode_card.update_content("⏸ 待機中", "#6b7280")
+        self.mode_card.update_content("‖ 待機中", "#6b7280")
         initial_detection_info = (
             "NCC: -- | 綠色: --\n"
             "計數: --/--"
         )
-        self.detection_card.update_content(f"⚪ 等待啟動\n{initial_detection_info}", "#6b7280", False)
+        self.detection_card.update_content(f"○ 等待啟動\n{initial_detection_info}", "#6b7280", False)
 
         # 載入 positions 數據
         self.load_positions_data()
@@ -1589,13 +1608,21 @@ class DashboardPage(QWidget):
             self.simulate_btn.setEnabled(False)
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
-            self.mode_card.update_content("🎯 模擬實戰中", "#0284c7")
+            self.mode_card.update_content("◉ 模擬實戰中", "#0284c7")
             self.detection_card.update_content("檢測中", "#f59e0b", False)
             self.start_time = self.get_current_time()
+
+            # ✅ 更新模式追蹤變數
+            self.current_mode = "simulate"
+            self.current_mode_text = "◉ 模擬實戰中"
 
             # ✅ 更新新版卡片狀態為運行中
             if hasattr(self, 'compact_strategy_card'):
                 self.compact_strategy_card.set_status(True)
+
+            # 發送精簡監控視窗狀態更新
+            self.compact_status_updated.emit("simulate", "◉ 模擬實戰中", "○ 檢測中")
+            self.compact_bet_status_updated.emit("waiting", {})
 
             # 啟動運行時間計時器
             self.runtime_timer = QTimer()
@@ -1608,7 +1635,7 @@ class DashboardPage(QWidget):
             # 載入歷史結果到開獎結果卡片
             self._load_history_results()
 
-            self.log_viewer.add_log("INFO", "Dashboard", "🎯 模擬實戰模式已啟動 - 將移動滑鼠但不實際點擊")
+            self.log_viewer.add_log("INFO", "Dashboard", "模擬實戰模式已啟動 - 將移動滑鼠但不實際點擊")
 
     def start_real_battle(self):
         """啟動真實實戰模式"""
@@ -1622,7 +1649,7 @@ class DashboardPage(QWidget):
         # 確認對話框
         reply = QMessageBox.question(
             self, "確認實戰模式",
-            "⚠️ 您即將啟動實戰模式！\n\n" +
+            "警告: 您即將啟動實戰模式！\n\n" +
             "系統將會：\n" +
             "• 檢測遊戲畫面的「請下注」狀態\n" +
             "• 根據策略自動移動滑鼠並點擊\n" +
@@ -1648,9 +1675,17 @@ class DashboardPage(QWidget):
             self.detection_card.update_content("檢測中", "#f59e0b", False)
             self.start_time = self.get_current_time()
 
+            # ✅ 更新模式追蹤變數
+            self.current_mode = "battle"
+            self.current_mode_text = "⚡ 實戰進行中"
+
             # ✅ 更新新版卡片狀態為運行中
             if hasattr(self, 'compact_strategy_card'):
                 self.compact_strategy_card.set_status(True)
+
+            # 發送精簡監控視窗狀態更新
+            self.compact_status_updated.emit("battle", "⚡ 實戰進行中", "○ 檢測中")
+            self.compact_bet_status_updated.emit("waiting", {})
 
             # 啟動運行時間計時器
             self.runtime_timer = QTimer()
@@ -1663,7 +1698,7 @@ class DashboardPage(QWidget):
             # 載入歷史結果到開獎結果卡片
             self._load_history_results()
 
-            self.log_viewer.add_log("WARNING", "Dashboard", "⚡ 實戰模式已啟動 - 將執行真實點擊操作")
+            self.log_viewer.add_log("WARNING", "Dashboard", "實戰模式已啟動 - 將執行真實點擊操作")
 
     def _check_config_ready(self):
         """檢查配置是否就緒"""
@@ -1709,9 +1744,17 @@ class DashboardPage(QWidget):
         if self.engine_worker:
             self.engine_worker.stop_engine()
 
+        # ✅ 重置模式追蹤變數
+        self.current_mode = "idle"
+        self.current_mode_text = "待機"
+
         # ✅ 更新新版卡片狀態為等待啟動
         if hasattr(self, 'compact_strategy_card'):
             self.compact_strategy_card.set_status(False)
+
+        # 發送精簡監控視窗狀態更新
+        self.compact_status_updated.emit("idle", "■ 已停止", "○ 已停止")
+        self.compact_bet_status_updated.emit("waiting", {})
 
         # 重置按鈕狀態
         self.simulate_btn.setEnabled(True)
@@ -1719,29 +1762,29 @@ class DashboardPage(QWidget):
         self.stop_btn.setEnabled(False)
 
         # 重置模式顯示
-        self.mode_card.update_content("⏸ 已停止", "#6b7280")
+        self.mode_card.update_content("■ 已停止", "#6b7280")
         stopped_detection_info = (
             "NCC: -- | 綠色: --\n"
             "計數: --/--"
         )
-        self.detection_card.update_content(f"⚫ 已停止\n{stopped_detection_info}", "#6b7280", False)
+        self.detection_card.update_content(f"○ 已停止\n{stopped_detection_info}", "#6b7280", False)
 
         if hasattr(self, 'runtime_timer'):
             self.runtime_timer.stop()
 
-        self.log_viewer.add_log("INFO", "Dashboard", "🛑 引擎已停止")
+        self.log_viewer.add_log("INFO", "Dashboard", "引擎已停止")
 
     def on_state_changed(self, state):
         """引擎狀態改變"""
         state_display = {
             "idle": "● 待機",
-            "running": "⚡ 運行中",
+            "running": "▶ 運行中",
             "betting_open": "● 下注期",
-            "placing_bets": "⚡ 下注中",
+            "placing_bets": "▶ 下注中",
             "in_round": "● 局中",
-            "eval_result": "📊 結算中",
-            "error": "✗ 錯誤",
-            "paused": "⏸ 暫停"
+            "eval_result": "▪ 結算中",
+            "error": "× 錯誤",
+            "paused": "‖ 暫停"
         }.get(state, f"? {state}")
 
         color = {
@@ -1840,10 +1883,20 @@ class DashboardPage(QWidget):
             self.log_viewer.add_log(
                 "INFO",
                 "Dashboard",
-                f"⏳ 結果局開始: {bet_data.get('strategy', 'N/A')} | "
+                f"● 結果局開始: {bet_data.get('strategy', 'N/A')} | "
                 f"{bet_data.get('direction', 'N/A')} | "
                 f"${bet_data.get('amount', 0)}"
             )
+
+            # 保存當前下注資訊並發送到精簡監控視窗
+            self.compact_current_bet = bet_data.copy()
+            compact_data = {
+                "direction": bet_data.get("direction", ""),
+                "amount": bet_data.get("amount", 0),
+                "chips_str": bet_data.get("chips_str", "--")
+            }
+            self.compact_bet_status_updated.emit("betting", compact_data)
+
         except Exception as e:
             self.log_viewer.add_log("ERROR", "Dashboard", f"顯示結果局失敗: {e}")
 
@@ -1855,14 +1908,68 @@ class DashboardPage(QWidget):
             outcome: 結果 ("win", "loss", "skip")
             pnl: 盈虧金額
         """
+        print(f"[Dashboard] ★★★ on_result_settled() called! outcome={outcome}, pnl={pnl}")
         try:
             self.next_bet_card.update_result_outcome(outcome, pnl)
-            outcome_emoji = {"win": "✅", "loss": "❌", "skip": "⏭️"}.get(outcome, "❓")
+            outcome_emoji = {"win": "√", "loss": "×", "skip": "→"}.get(outcome, "?")
             self.log_viewer.add_log(
                 "INFO",
                 "Dashboard",
                 f"{outcome_emoji} 結果局結算: {outcome.upper()} | PnL: ${pnl:+.2f}"
             )
+
+            # 更新精簡監控視窗的盈虧統計
+            self.compact_session_pnl += pnl
+            self.compact_total_rounds += 1
+            if outcome == "win":
+                self.compact_wins += 1
+            elif outcome == "loss":
+                self.compact_losses += 1
+
+            # ✅ 不在這裡添加歷史記錄
+            # compact_history 只應該包含開獎結果 {'winner': 'P/B/T'}
+            # 由 on_engine_status() 負責添加
+
+            # 發送結果已出的狀態
+            if self.compact_current_bet:
+                # 從最新結果中獲取開獎結果
+                result_winner = ""
+                if self.latest_results and "main" in self.latest_results:
+                    info = self.latest_results.get("main")
+                    if info and info.get("winner"):
+                        result_winner = info.get("winner", "")
+
+                compact_data = {
+                    "direction": self.compact_current_bet.get("direction", ""),
+                    "amount": self.compact_current_bet.get("amount", 0),
+                    "result": result_winner,
+                    "outcome": outcome,
+                    "pnl": pnl
+                }
+                self.compact_bet_status_updated.emit("settled", compact_data)
+
+            # 發送盈虧更新
+            self.compact_pnl_updated.emit(
+                self.compact_session_pnl,
+                self.compact_wins,
+                self.compact_losses,
+                self.compact_total_rounds
+            )
+
+            # 更新即時狀態卡片的結果顯示
+            if self.compact_current_bet and hasattr(self, 'compact_live_card'):
+                bet_dir = self.compact_current_bet.get("direction", "")
+                self.log_viewer.add_log(
+                    "DEBUG",
+                    "Dashboard",
+                    f"更新結果顯示: 下注={bet_dir} 開獎={result_winner} PnL={pnl}"
+                )
+                self.compact_live_card.update_last_result(
+                    bet_dir,
+                    result_winner,
+                    pnl
+                )
+
         except Exception as e:
             self.log_viewer.add_log("ERROR", "Dashboard", f"更新結果局失敗: {e}")
 
@@ -1950,6 +2057,32 @@ class DashboardPage(QWidget):
             if hasattr(self, 'compact_strategy_card'):
                 self.compact_strategy_card.update_stats(summary)
 
+            # 發送策略資訊更新到精簡監控視窗
+            if summary and "lines" in summary and len(summary["lines"]) > 0:
+                first_line = summary["lines"][0]
+                strategy_name = first_line.get("strategy", "--")
+                table_id = first_line.get("table_id", "main")
+                round_id = str(first_line.get("current_round", "--"))
+
+                # 判斷策略狀態
+                status_value = first_line.get("status", "waiting")
+                if status_value == "running":
+                    status_str = "running"
+                elif status_value == "frozen":
+                    status_str = "frozen"
+                else:
+                    status_str = "waiting"
+
+                # 獲取層數資訊
+                current_layer = first_line.get("current_layer", 0)
+                max_layer = first_line.get("max_layer", 0)
+                next_stake = first_line.get("next_stake", 0.0)
+
+                self.compact_strategy_updated.emit(strategy_name, table_id, round_id, status_str, current_layer, max_layer, next_stake)
+
+                # ✅ 檢查警告條件
+                self._check_warning_conditions(first_line, summary)
+
             # 更新即時狀態卡片
             if hasattr(self, 'compact_live_card'):
                 self.compact_live_card.update_from_snapshot(summary, table_id="main")
@@ -1961,6 +2094,24 @@ class DashboardPage(QWidget):
                         winner = info.get("winner")
                         self.log_viewer.add_log("INFO", "Dashboard", f"➕ 添加到路單歷史: winner={winner}")
                         self.compact_live_card.add_history(winner)
+
+                        # ✅ 同時更新精簡監控視窗的歷史（顯示最近5局開獎結果）
+                        print(f"[Dashboard] 🎯 New result for compact monitor: winner={winner}")
+
+                        # 添加開獎結果到歷史記錄（只記錄開獎結果，不管有沒有下注）
+                        history_item = {"winner": winner}  # banker, player, tie
+                        print(f"[Dashboard] Adding to compact_history: {history_item}")
+                        self.compact_history.append(history_item)
+                        print(f"[Dashboard] compact_history length: {len(self.compact_history)}")
+
+                        # 只保留最近10局
+                        if len(self.compact_history) > 10:
+                            self.compact_history = self.compact_history[-10:]
+
+                        # 發送歷史更新信號
+                        print(f"[Dashboard] Emitting compact_history_updated signal")
+                        print(f"[Dashboard] compact_history data: {self.compact_history}")
+                        self.compact_history_updated.emit(self.compact_history)
         except Exception as e:
             self.log_viewer.add_log("WARNING", "Dashboard", f"更新精簡卡片失敗: {e}")
 
@@ -1987,7 +2138,7 @@ class DashboardPage(QWidget):
                 self.log_viewer.add_log("DEBUG", "Dashboard", f"過濾後 main 桌有 {len(main_results)} 筆記錄")
 
                 if main_results:
-                    self.log_viewer.add_log("INFO", "Dashboard", f"📊 載入 {len(main_results)} 筆歷史開獎記錄")
+                    self.log_viewer.add_log("INFO", "Dashboard", f"載入 {len(main_results)} 筆歷史開獎記錄")
 
                     # 載入到卡片
                     for result in main_results:
@@ -2035,12 +2186,12 @@ class DashboardPage(QWidget):
 
         # 檢查是否正在觸發過程中
         if self.is_triggering:
-            self.log_viewer.add_log("WARNING", "Dashboard", "⚠️ 系統正在執行點擊序列，請稍後再試")
+            self.log_viewer.add_log("WARNING", "Dashboard", "系統正在執行點擊序列，請稍後再試")
             return
 
         # 檢查是否在檢測模式中
         if self.detection_active:
-            self.log_viewer.add_log("WARNING", "Dashboard", "⚠️ 請先停止檢測模式再進行測試")
+            self.log_viewer.add_log("WARNING", "Dashboard", "請先停止檢測模式再進行測試")
             return
 
         # 1. 配置驗證
@@ -2088,18 +2239,18 @@ class DashboardPage(QWidget):
 
             self.log_viewer.add_log(
                 "INFO", "Test",
-                f"🧪 測試計劃: {test_amount}元 = {chips_str}"
+                f"測試計劃: {test_amount}元 = {chips_str}"
             )
             self.log_viewer.add_log(
                 "INFO", "Test",
-                f"📊 總點擊次數: {total_clicks} (籌碼{len(plan.chips)}次 + 下注1次 + 確認1次)"
+                f"總點擊次數: {total_clicks} (籌碼{len(plan.chips)}次 + 下注1次 + 確認1次)"
             )
 
             # 5. 設置測試標志
             self.is_triggering = True
 
             # 6. 執行測試
-            self.log_viewer.add_log("INFO", "Test", "▶️ 開始執行測試序列...")
+            self.log_viewer.add_log("INFO", "Test", "開始執行測試序列...")
             self.engine_worker.force_test_sequence()
 
         except Exception as e:
@@ -2199,15 +2350,36 @@ class DashboardPage(QWidget):
 
             # 根據檢測結果更新狀態
             if decision == 'OPEN':
-                self.detection_card.update_content(f"🟢 可下注\n{details}", "#10b981", True)
+                self.detection_card.update_content(f"● 可下注\n{details}", "#10b981", True)
+                # 發送檢測狀態到精簡監控視窗
+                detection_text = "● 可下注"
+                self.compact_status_updated.emit(
+                    self.current_mode if hasattr(self, 'current_mode') else "idle",
+                    self.current_mode_text if hasattr(self, 'current_mode_text') else "待機",
+                    detection_text
+                )
                 # 防重複觸發：只在狀態從非OPEN變為OPEN時觸發，且當前未在觸發過程中
                 if (hasattr(self, 'engine_worker') and self.engine_worker and self.detection_active and
                     self.last_decision != 'OPEN' and not self.is_triggering):
                     self.trigger_click_sequence()
             elif decision == 'CLOSED':
-                self.detection_card.update_content(f"🔴 停止下注\n{details}", "#ef4444", False)
+                self.detection_card.update_content(f"■ 停止下注\n{details}", "#ef4444", False)
+                # 發送檢測狀態到精簡監控視窗
+                detection_text = "■ 停止下注"
+                self.compact_status_updated.emit(
+                    self.current_mode if hasattr(self, 'current_mode') else "idle",
+                    self.current_mode_text if hasattr(self, 'current_mode_text') else "待機",
+                    detection_text
+                )
             else:
-                self.detection_card.update_content(f"🟡 檢測中\n{details}", "#f59e0b", False)
+                self.detection_card.update_content(f"○ 檢測中\n{details}", "#f59e0b", False)
+                # 發送檢測狀態到精簡監控視窗
+                detection_text = "○ 檢測中"
+                self.compact_status_updated.emit(
+                    self.current_mode if hasattr(self, 'current_mode') else "idle",
+                    self.current_mode_text if hasattr(self, 'current_mode_text') else "待機",
+                    detection_text
+                )
 
             # 記錄當前決策
             self.last_decision = decision
@@ -2227,7 +2399,7 @@ class DashboardPage(QWidget):
 
         except Exception as e:
             self.log_viewer.add_log("ERROR", "Detection", f"檢測錯誤: {e}")
-            self.detection_card.update_content(f"❌ 檢測錯誤\n{str(e)}", "#ef4444", False)
+            self.detection_card.update_content(f"× 檢測錯誤\n{str(e)}", "#ef4444", False)
 
     def trigger_click_sequence(self):
         """觸發點擊序列（當檢測到可下注時）"""
@@ -2235,7 +2407,7 @@ class DashboardPage(QWidget):
             return  # 如果已經在觸發過程中，直接返回
 
         self.is_triggering = True  # 設置觸發標志
-        self.log_viewer.add_log("INFO", "Engine", "🎯 檢測到可下注")
+        self.log_viewer.add_log("INFO", "Engine", "檢測到可下注")
 
         # 使用QTimer.singleShot延遲1秒後執行
         QTimer.singleShot(1000, self._execute_delayed_click_sequence)
@@ -2260,7 +2432,7 @@ class DashboardPage(QWidget):
         if self.detector:
             self.detection_active = True
             self.detection_timer.start()
-            self.log_viewer.add_log("INFO", "Detection", "🎯 開始直接檢測")
+            self.log_viewer.add_log("INFO", "Detection", "開始直接檢測")
 
     def stop_direct_detection(self):
         """停止直接檢測"""
@@ -2268,7 +2440,41 @@ class DashboardPage(QWidget):
         self.detection_timer.stop()
         self.is_triggering = False  # 重置觸發標志
         self.last_decision = None  # 重置決策記錄
-        self.log_viewer.add_log("INFO", "Detection", "⏸️ 停止直接檢測")
+        self.log_viewer.add_log("INFO", "Detection", "停止直接檢測")
+
+    def _check_warning_conditions(self, line_data: dict, summary: dict):
+        """
+        檢查警告條件並發送警告訊息到精簡監控視窗
+
+        警告條件包括:
+        1. 策略被凍結 (frozen)
+        2. 連續虧損 (3次以上)
+        3. 單局大額虧損 (超過基礎注額的5倍)
+        """
+        warnings = []
+
+        # 1. 檢查策略狀態
+        status = line_data.get("status", "waiting")
+        if status == "frozen":
+            frozen_reason = line_data.get("frozen_reason", "未知原因")
+            warnings.append(f"策略已凍結: {frozen_reason}")
+
+        # 2. 檢查連續虧損
+        if self.compact_losses >= 3 and self.compact_wins == 0:
+            warnings.append(f"連續虧損 {self.compact_losses} 次")
+
+        # 3. 檢查盈虧狀況
+        if self.compact_session_pnl < 0:
+            base_bet = 100  # 假設基礎注額為100，可以從策略配置中讀取
+            if abs(self.compact_session_pnl) >= base_bet * 5:
+                warnings.append(f"累計虧損 {abs(self.compact_session_pnl):.0f} 元")
+
+        # 發送警告或清除警告
+        if warnings:
+            warning_message = " | ".join(warnings)
+            self.compact_warning.emit(warning_message)
+        else:
+            self.compact_warning_clear.emit()
 
     def closeEvent(self, event):
         """頁面關閉事件"""

@@ -45,16 +45,12 @@ class Actuator:
         rx = x + random.randint(-jitter, jitter)
         ry = y + random.randint(-jitter, jitter)
 
-        mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
-        ck = self.ui.get("click", {}).get("click_delay_ms", [40, 80])
+        mv = self.ui.get("click", {}).get("move_delay_ms", [300, 600])
+        ck = self.ui.get("click", {}).get("click_delay_ms", [200, 400])
 
-        # 乾跑模式使用極短延遲，避免卡住UI
-        if self.dry:
-            md = 0.02  # 20ms duration，避免過快但不阻塞
-            cd = 0.02  # 20ms click delay
-        else:
-            md = random.randint(int(mv[0]), int(mv[1]))/1000.0
-            cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
+        # 模擬模式和真實模式都使用配置的延遲
+        md = random.randint(int(mv[0]), int(mv[1]))/1000.0
+        cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
 
         if self.dry:
             log_msg = f"移動滑鼠到 {name} -> ({rx},{ry}) [不點擊]"
@@ -92,15 +88,12 @@ class Actuator:
             rx = x + random.randint(-jitter, jitter)
             ry = y + random.randint(-jitter, jitter)
 
-            mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
-            ck = self.ui.get("click", {}).get("click_delay_ms", [40, 80])
+            mv = self.ui.get("click", {}).get("move_delay_ms", [300, 600])
+            ck = self.ui.get("click", {}).get("click_delay_ms", [200, 400])
 
-            if self.dry:
-                md = 0.02
-                cd = 0.02
-            else:
-                md = random.randint(int(mv[0]), int(mv[1]))/1000.0
-                cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
+            # 模擬模式和真實模式都使用配置的延遲
+            md = random.randint(int(mv[0]), int(mv[1]))/1000.0
+            cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
 
             if self.dry:
                 log_msg = f"移動滑鼠到 {chip.label or f'{value}元籌碼'} -> ({rx},{ry}) [不點擊]"
@@ -142,21 +135,20 @@ class Actuator:
         # 新系統：使用 ChipProfile
         if self.chip_profile:
             pos = self.chip_profile.get_bet_position(target)
+            logger.info(f"[DEBUG] click_bet({target}) - pos: {pos}")
             if pos and pos.get("calibrated", False):
                 x, y = pos["x"], pos["y"]
+                logger.info(f"[DEBUG] click_bet({target}) - 已校準，座標: ({x}, {y})")
                 jitter = int(self.ui.get("click", {}).get("jitter_px", 2))
                 rx = x + random.randint(-jitter, jitter)
                 ry = y + random.randint(-jitter, jitter)
 
-                mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
-                ck = self.ui.get("click", {}).get("click_delay_ms", [40, 80])
+                mv = self.ui.get("click", {}).get("move_delay_ms", [300, 600])
+                ck = self.ui.get("click", {}).get("click_delay_ms", [200, 400])
 
-                if self.dry:
-                    md = 0.02
-                    cd = 0.02
-                else:
-                    md = random.randint(int(mv[0]), int(mv[1]))/1000.0
-                    cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
+                # 模擬模式和真實模式都使用配置的延遲
+                md = random.randint(int(mv[0]), int(mv[1]))/1000.0
+                cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
 
                 target_name_map = {
                     "banker": "莊家",
@@ -166,11 +158,13 @@ class Actuator:
                 target_name = target_name_map.get(target, target)
 
                 if self.dry:
-                    log_msg = f"移動滑鼠到 {target_name} -> ({rx},{ry}) [不點擊]"
+                    log_msg = f"移動滑鼠到 {target_name} -> ({rx},{ry}) [不點擊]，移動時間: {md:.2f}秒"
                     logger.info(log_msg)
                     if self.log_callback:
                         self.log_callback("INFO", "Actuator", log_msg)
+                    logger.info(f"[DEBUG] 開始移動滑鼠，duration={md}")
                     pyautogui.moveTo(rx, ry, duration=md)
+                    logger.info(f"[DEBUG] 滑鼠移動完成")
                     time.sleep(cd)
                     return True
                 else:
@@ -208,15 +202,12 @@ class Actuator:
                 rx = x + random.randint(-jitter, jitter)
                 ry = y + random.randint(-jitter, jitter)
 
-                mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
-                ck = self.ui.get("click", {}).get("click_delay_ms", [40, 80])
+                mv = self.ui.get("click", {}).get("move_delay_ms", [300, 600])
+                ck = self.ui.get("click", {}).get("click_delay_ms", [200, 400])
 
-                if self.dry:
-                    md = 0.02
-                    cd = 0.02
-                else:
-                    md = random.randint(int(mv[0]), int(mv[1]))/1000.0
-                    cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
+                # 模擬模式和真實模式都使用配置的延遲
+                md = random.randint(int(mv[0]), int(mv[1]))/1000.0
+                cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
 
                 if self.dry:
                     log_msg = f"移動滑鼠到 確認按鈕 -> ({rx},{ry}) [不點擊]"
@@ -258,15 +249,12 @@ class Actuator:
                 rx = x + random.randint(-jitter, jitter)
                 ry = y + random.randint(-jitter, jitter)
 
-                mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
-                ck = self.ui.get("click", {}).get("click_delay_ms", [40, 80])
+                mv = self.ui.get("click", {}).get("move_delay_ms", [300, 600])
+                ck = self.ui.get("click", {}).get("click_delay_ms", [200, 400])
 
-                if self.dry:
-                    md = 0.02
-                    cd = 0.02
-                else:
-                    md = random.randint(int(mv[0]), int(mv[1]))/1000.0
-                    cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
+                # 模擬模式和真實模式都使用配置的延遲
+                md = random.randint(int(mv[0]), int(mv[1]))/1000.0
+                cd = random.randint(int(ck[0]), int(ck[1]))/1000.0
 
                 if self.dry:
                     log_msg = f"移動滑鼠到 取消按鈕 -> ({rx},{ry}) [不點擊]"
@@ -299,14 +287,17 @@ class Actuator:
         rx = x + random.randint(-jitter, jitter)
         ry = y + random.randint(-jitter, jitter)
 
-        mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
-        cd = random.randint(int(mv[0]), int(mv[1]))/1000.0
+        mv = self.ui.get("click", {}).get("move_delay_ms", [300, 600])
+        md = random.randint(int(mv[0]), int(mv[1]))/1000.0
+        cd = random.randint(200, 400)/1000.0
 
         label_text = f" ({label})" if label else ""
         log_msg = f"移動滑鼠到{label_text} -> ({rx},{ry})"
         logger.info(f"[測試] {log_msg}")
         if self.log_callback:
             self.log_callback("INFO", "Actuator", log_msg)
+
+        pyautogui.moveTo(rx, ry, duration=md)
         time.sleep(cd)  # 模擬點擊延遲
         return True
 
@@ -324,7 +315,7 @@ class Actuator:
         rx = x + random.randint(-jitter, jitter)
         ry = y + random.randint(-jitter, jitter)
 
-        mv = self.ui.get("click", {}).get("move_delay_ms", [40, 120])
+        mv = self.ui.get("click", {}).get("move_delay_ms", [300, 600])
         md = random.randint(int(mv[0]), int(mv[1]))/1000.0
 
         if self.dry:

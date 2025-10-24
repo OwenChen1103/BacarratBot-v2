@@ -28,118 +28,104 @@ class CompactLiveCard(QFrame):
         self.current_phase = "idle"
         self.history = []  # 路單歷史 (最多10個)
         self._opacity = 1.0
+        self.last_result = None  # 保存最後一次結果
         self._build_ui()
         self.setMouseTracking(True)  # 啟用滑鼠追蹤
 
     def _build_ui(self) -> None:
-        """構建 UI"""
-        self.setFrameStyle(QFrame.StyledPanel)
-        self._set_normal_style()
+        """構建 UI - 現代設計感版本"""
+        self.setFrameStyle(QFrame.NoFrame)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #1e2128;
+                border: 1px solid #2d3139;
+                border-radius: 10px;
+            }
+        """)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(Spacing.LINE_SPACING_NORMAL)
-        layout.setContentsMargins(
-            Spacing.PADDING_LG,
-            Spacing.PADDING_MD,
-            Spacing.PADDING_LG,
-            Spacing.PADDING_MD
-        )
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 14, 16, 14)
 
-        # === 第1行：狀態標題 ===
-        self.line1_label = QLabel(f"{Icons.IDLE} 等待啟動...")
-        self.line1_label.setFont(FontStyle.title())
-        self.line1_label.setStyleSheet(f"color: {Colors.TEXT_CRITICAL}; padding: 4px;")
-        layout.addWidget(self.line1_label)
+        # === 標題欄：狀態 ===
+        header_container = QHBoxLayout()
+        header_container.setSpacing(12)
+
+        self.line1_label = QLabel("📊 即時狀態")
+        self.line1_label.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
+        self.line1_label.setStyleSheet("color: #e5e7eb; background: transparent; border: none;")
+        header_container.addWidget(self.line1_label)
+
+        header_container.addStretch()
+
+        # 狀態指示
+        self.status_dot = QLabel("● 待機")
+        self.status_dot.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
+        self.status_dot.setStyleSheet("color: #6b7280; background: transparent; border: none;")
+        header_container.addWidget(self.status_dot)
+
+        layout.addLayout(header_container)
 
         # === 分隔線 ===
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setStyleSheet(StyleSheet.divider())
-        layout.addWidget(divider)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet("background-color: #2d3139; min-height: 1px; max-height: 1px; border: none;")
+        layout.addWidget(separator)
 
-        # === 第2行：路單歷史 ===
+        # === 路單歷史 ===
         self.line2_label = QLabel("路單  等待數據...")
-        self.line2_label.setFont(FontStyle.body())
-        self.line2_label.setStyleSheet(f"color: {Colors.TEXT_NORMAL}; padding: 4px;")
+        self.line2_label.setFont(QFont("Microsoft YaHei UI", 10))
+        self.line2_label.setStyleSheet("color: #d1d5db; background: transparent; border: none; padding: 2px 0px;")
         self.line2_label.setWordWrap(True)
         layout.addWidget(self.line2_label)
 
-        # === 第3行：盈虧/下注資訊（使用水平佈局）===
-        self.line3_container = QHBoxLayout()
-        self.line3_container.setSpacing(Spacing.MARGIN_MD)
+        # === 當前盈虧 ===
+        self.pnl_label = QLabel("盈虧  等待數據...")
+        self.pnl_label.setFont(QFont("Microsoft YaHei UI", 10))
+        self.pnl_label.setStyleSheet("color: #d1d5db; background: transparent; border: none; padding: 2px 0px;")
+        layout.addWidget(self.pnl_label)
 
-        self.pnl_label = QLabel(f"{Icons.MONEY} 等待數據...")
-        self.pnl_label.setFont(FontStyle.body())
-        self.pnl_label.setStyleSheet(f"color: {Colors.TEXT_NORMAL}; padding: 4px;")
-        self.line3_container.addWidget(self.pnl_label)
+        # === 風控狀態 ===
+        self.risk_label = QLabel("")
+        self.risk_label.setFont(QFont("Microsoft YaHei UI", 9))
+        self.risk_label.setStyleSheet("color: #9ca3af; background: transparent; border: none; padding: 2px 0px;")
+        layout.addWidget(self.risk_label)
 
-        layout.addLayout(self.line3_container)
+        # === 分隔線 ===
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.HLine)
+        separator2.setStyleSheet("background-color: #2d3139; min-height: 1px; max-height: 1px; border: none;")
+        layout.addWidget(separator2)
 
-        # === 第4行：進度條 + 風控/預測 ===
-        self.line4_container = QWidget()
-        self.line4_layout = QVBoxLayout(self.line4_container)
-        self.line4_layout.setContentsMargins(0, 0, 0, 0)
-        self.line4_layout.setSpacing(4)
+        # === 上手結果（永久顯示）===
+        self.result_label = QLabel("<span style='color: #6b7280;'>上手結果: 尚未觸發</span>")
+        self.result_label.setFont(QFont("Microsoft YaHei UI", 9))
+        self.result_label.setStyleSheet("background: transparent; border: none; padding: 2px 0px;")
+        self.result_label.setWordWrap(True)
+        layout.addWidget(self.result_label)
 
-        # 層級進度條
-        self.layer_progress = QProgressBar()
-        self.layer_progress.setRange(0, 3)
-        self.layer_progress.setValue(0)
-        self.layer_progress.setTextVisible(True)
-        self.layer_progress.setFormat("層級 0/3")
-        self.layer_progress.setFixedHeight(20)
-        self.layer_progress.setStyleSheet(StyleSheet.progress_bar())
-        self.line4_layout.addWidget(self.layer_progress)
-
-        # 風控/預測文字
-        self.line4_label = QLabel("")
-        self.line4_label.setFont(FontStyle.caption())
-        self.line4_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; padding: 2px;")
-        self.line4_layout.addWidget(self.line4_label)
-
-        layout.addWidget(self.line4_container)
-
+        # 填滿整個卡片
         layout.addStretch()
 
     def _set_normal_style(self) -> None:
-        """設置正常樣式"""
-        self.setStyleSheet(StyleSheet.card(
-            bg_color=Colors.BG_PRIMARY,
-            border_color=Colors.BORDER_DEFAULT,
-            padding=Spacing.PADDING_LG,
-            radius=Spacing.RADIUS_LG
-        ))
+        """設置正常樣式（現代化設計 - 無需改變背景）"""
+        pass
 
     def _set_highlight_style(self, status: str = 'ready') -> None:
-        """設置高亮樣式"""
-        bg_color = Colors.status_bg(status)
-        border_color = Colors.status_border(status)
-        self.setStyleSheet(StyleSheet.card(
-            bg_color=bg_color,
-            border_color=border_color,
-            padding=Spacing.PADDING_LG,
-            radius=Spacing.RADIUS_LG
-        ))
+        """設置高亮樣式（現代化設計 - 使用文字顏色突出）"""
+        pass
 
     # ============================================================
-    # 滑鼠互動
+    # 滑鼠互動（現代化設計 - 移除懸停效果）
     # ============================================================
 
     def enterEvent(self, event) -> None:
-        """滑鼠懸停"""
-        self.setStyleSheet(StyleSheet.card(
-            bg_color=Colors.BG_HOVER,
-            border_color=Colors.BORDER_HOVER,
-            padding=Spacing.PADDING_LG,
-            radius=Spacing.RADIUS_LG
-        ))
+        """滑鼠懸停（無效果）"""
+        pass
 
     def leaveEvent(self, event) -> None:
-        """滑鼠離開"""
-        if self.current_phase == "ready_to_bet":
-            self._set_highlight_style('ready')
-        else:
-            self._set_normal_style()
+        """滑鼠離開（無效果）"""
+        pass
 
     # ============================================================
     # 狀態更新
@@ -210,93 +196,88 @@ class CompactLiveCard(QFrame):
 
     def _show_idle(self) -> None:
         """顯示：待機狀態"""
-        self.line1_label.setText(f"{Icons.IDLE} 等待啟動...")
-        self.line1_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; padding: 4px;")
+        self.line1_label.setText("📊 即時狀態")
+        self.status_dot.setText("● 待機")
+        self.status_dot.setStyleSheet("color: #6b7280; background: transparent; border: none;")
 
-        # ✅ 顯示已有的路單歷史（如果有的話）
+        # 路單
         if self.history:
             history_html = self._format_history_html()
-            self.line2_label.setText(f"路單  {history_html}")
+            self.line2_label.setText(f"<span style='color: #9ca3af;'>路單</span>  {history_html}")
         else:
-            self.line2_label.setText("路單  等待數據...")
+            self.line2_label.setText("<span style='color: #9ca3af;'>路單</span>  等待數據...")
 
-        self.pnl_label.setText(f"{Icons.MONEY} 等待數據...")
-        self.layer_progress.setValue(0)
-        self.layer_progress.setFormat("層級 0/3")
-        self.line4_label.setText("")
+        # 盈虧
+        self.pnl_label.setText("<span style='color: #9ca3af;'>盈虧</span>  等待數據...")
+        self.risk_label.setText("")
+
+        # 上手結果
+        if not self.last_result:
+            self.result_label.setText("<span style='color: #6b7280;'>上手結果: 尚未觸發</span>")
+
         self._set_normal_style()
 
     def _show_waiting_trigger(self, snapshot: Dict[str, Any], table_id: str) -> None:
         """顯示：等待觸發"""
-        # === 第1行：狀態 ===
-        self.line1_label.setText(f"{Icons.WAITING} 等待觸發  round_???  {Icons.CHECK} 可下注")
-        self.line1_label.setStyleSheet(f"color: {Colors.TEXT_CRITICAL}; padding: 4px;")
+        self.line1_label.setText("📊 即時狀態")
+        self.status_dot.setText("● 等待觸發")
+        self.status_dot.setStyleSheet("color: #3b82f6; background: transparent; border: none;")
 
-        # === 第2行：路單 ===
+        # 路單
         history_html = self._format_history_html()
-        self.line2_label.setText(f"路單  {history_html}  <span style='color: {Colors.TEXT_MUTED};'>[等待]</span>")
+        self.line2_label.setText(f"<span style='color: #9ca3af;'>路單</span>  {history_html}")
 
-        # === 第3行：盈虧 ===
+        # 盈虧
         table_pnl, global_pnl = self._get_pnl(snapshot, table_id)
         self._update_pnl_display(table_pnl, global_pnl)
 
-        # === 第4行：層級進度條 ===
-        current_layer, max_layer, stake = self._get_layer_info(snapshot, table_id)
-        self._update_layer_progress(current_layer, max_layer)
-        self.line4_label.setText(f"待命 {stake}元  {self._get_risk_status_html(snapshot, table_id)}")
+        # 風控狀態
+        self._update_risk_display(snapshot, table_id)
 
         self._set_normal_style()
 
     def _show_ready_to_bet(self, snapshot: Dict[str, Any], table_id: str) -> None:
         """顯示：準備下注（高亮狀態）"""
-        # === 第1行：狀態（高亮） ===
-        self.line1_label.setText(f"{Icons.READY} 策略觸發！ round_???  {Icons.CHECK} 可下注 7秒")
-        self.line1_label.setStyleSheet(f"color: {Colors.SUCCESS_100}; padding: 4px; font-weight: bold;")
+        self.line1_label.setText("📊 即時狀態")
+        self.status_dot.setText("● 準備下注")
+        self.status_dot.setStyleSheet("color: #10b981; background: transparent; border: none; font-weight: bold;")
 
-        # === 第2行：路單 ===
+        # 路單
         history_html = self._format_history_html()
         self.line2_label.setText(
-            f"路單  {history_html}  "
-            f"<b style='color: {Colors.SUCCESS_500};'>[下注]</b>  "
-            f"<span style='color: {Colors.SUCCESS_300};'>← 已觸發！</span>"
+            f"<span style='color: #9ca3af;'>路單</span>  {history_html}  "
+            f"<span style='color: #10b981; font-weight: bold;'>[觸發]</span>"
         )
 
-        # === 第3行：下注資訊 ===
+        # 下注資訊
         bet_info_html = self._get_bet_info_html(snapshot, table_id)
-        self.pnl_label.setText(f"{Icons.READY} {bet_info_html}")
+        self.pnl_label.setText(f"<span style='color: #9ca3af;'>下注</span>  {bet_info_html}")
 
-        # === 第4行：預測 ===
-        current_layer, max_layer, stake = self._get_layer_info(snapshot, table_id)
-        self._update_layer_progress(current_layer, max_layer)
-        prediction_html = self._get_prediction_html(snapshot, table_id)
-        self.line4_label.setText(f"預測  {prediction_html}")
+        # 風控狀態
+        self._update_risk_display(snapshot, table_id)
 
         self._set_highlight_style('ready')
 
     def _show_waiting_result(self, snapshot: Dict[str, Any], table_id: str) -> None:
         """顯示：等待開獎"""
-        # === 第1行：狀態 ===
-        self.line1_label.setText(f"{Icons.WAITING} 等待開獎  round_???  🔒 已鎖定 (發牌中)")
-        self.line1_label.setStyleSheet(f"color: {Colors.WARNING_100}; padding: 4px; font-weight: bold;")
+        self.line1_label.setText("📊 即時狀態")
+        self.status_dot.setText("● 等待開獎")
+        self.status_dot.setStyleSheet("color: #f59e0b; background: transparent; border: none; font-weight: bold;")
 
-        # === 第2行：路單 ===
+        # 路單
         history_html = self._format_history_html()
         bet_direction = self._get_current_bet_direction(snapshot, table_id)
         self.line2_label.setText(
-            f"路單  {history_html}  "
-            f"<b style='color: {Colors.WARNING_500};'>[{bet_direction}]</b>  "
-            f"<span style='color: {Colors.WARNING_300};'>← 已下注</span>"
+            f"<span style='color: #9ca3af;'>路單</span>  {history_html}  "
+            f"<span style='color: #f59e0b; font-weight: bold;'>[下注{bet_direction}]</span>"
         )
 
-        # === 第3行：盈虧 ===
+        # 盈虧
         table_pnl, global_pnl = self._get_pnl(snapshot, table_id)
         self._update_pnl_display(table_pnl, global_pnl)
 
-        # === 第4行：預測 ===
-        current_layer, max_layer, stake = self._get_layer_info(snapshot, table_id)
-        self._update_layer_progress(current_layer, max_layer)
-        prediction_html = self._get_prediction_html(snapshot, table_id)
-        self.line4_label.setText(f"預測  {prediction_html}  <span style='color: {Colors.TEXT_MUTED};'>等待結果...</span>")
+        # 風控狀態
+        self._update_risk_display(snapshot, table_id)
 
         self._set_highlight_style('waiting')
 
@@ -305,24 +286,55 @@ class CompactLiveCard(QFrame):
     # ============================================================
 
     def _update_pnl_display(self, table_pnl: float, global_pnl: float) -> None:
-        """更新盈虧顯示（使用等寬字體 + 色彩標籤）"""
-        table_color = Colors.pnl_color(table_pnl)
-        global_color = Colors.pnl_color(global_pnl)
-        table_icon = Icons.UP if table_pnl > 0 else (Icons.DOWN if table_pnl < 0 else Icons.NEUTRAL)
-        global_icon = Icons.UP if global_pnl > 0 else (Icons.DOWN if global_pnl < 0 else Icons.NEUTRAL)
+        """更新盈虧顯示"""
+        # 顏色映射
+        table_color = "#10b981" if table_pnl > 0 else ("#ef4444" if table_pnl < 0 else "#6b7280")
+        global_color = "#10b981" if global_pnl > 0 else ("#ef4444" if global_pnl < 0 else "#6b7280")
 
-        html = f"""
-            {Icons.MONEY} 單桌 <b style='color: {table_color}; font-family: {FontStyle.FAMILY_MONO};'>{table_pnl:+.0f}</b> {table_icon}
-            全局 <b style='color: {global_color}; font-family: {FontStyle.FAMILY_MONO};'>{global_pnl:+.0f}</b> {global_icon}
-        """
+        table_sign = "+" if table_pnl > 0 else ""
+        global_sign = "+" if global_pnl > 0 else ""
+
+        html = (
+            f"<span style='color: #9ca3af;'>盈虧</span>  "
+            f"單桌 <span style='color: {table_color}; font-weight: bold;'>{table_sign}{table_pnl:.0f}</span> · "
+            f"全局 <span style='color: {global_color}; font-weight: bold;'>{global_sign}{global_pnl:.0f}</span>"
+        )
         self.pnl_label.setText(html)
 
-    def _update_layer_progress(self, current: int, total: int) -> None:
-        """更新層級進度條"""
-        self.layer_progress.setRange(0, total)
-        self.layer_progress.setValue(current)
-        percentage = (current / total * 100) if total > 0 else 0
-        self.layer_progress.setFormat(f"層級 {current}/{total} ({percentage:.0f}%)")
+    def _update_risk_display(self, snapshot: Dict[str, Any], table_id: str = "main") -> None:
+        """更新風控顯示（止盈止損距離）"""
+        _ = table_id  # 保留參數以保持接口一致
+        risk = snapshot.get("risk", {})
+        global_risk = risk.get("global_day", {})
+
+        pnl = global_risk.get("pnl", 0.0)
+        take_profit = global_risk.get("take_profit", 5000.0)
+        stop_loss = global_risk.get("stop_loss", -2000.0)
+
+        if pnl > 0:
+            # 盈利狀態，顯示距離止盈
+            distance = take_profit - pnl
+            percentage = (pnl / take_profit * 100) if take_profit > 0 else 0
+            risk_html = (
+                f"<span style='color: #6b7280;'>風控</span>  "
+                f"距止盈 <span style='color: #10b981; font-weight: bold;'>{distance:.0f}</span> "
+                f"<span style='color: #6b7280;'>({percentage:.0f}%)</span>"
+            )
+        else:
+            # 虧損狀態，顯示距離止損
+            distance = abs(pnl - stop_loss)
+            percentage = (abs(pnl) / abs(stop_loss) * 100) if stop_loss < 0 else 0
+            risk_html = (
+                f"<span style='color: #6b7280;'>風控</span>  "
+                f"距止損 <span style='color: #ef4444; font-weight: bold;'>{distance:.0f}</span> "
+                f"<span style='color: #6b7280;'>({percentage:.0f}%)</span>"
+            )
+
+        self.risk_label.setText(risk_html)
+
+    def _update_layer_info(self, current: int, total: int, risk_info: str = "") -> None:
+        """更新層級資訊（簡化顯示）- 已不使用"""
+        pass
 
     def _format_history_html(self) -> str:
         """格式化路單歷史（HTML）"""
@@ -456,3 +468,39 @@ class CompactLiveCard(QFrame):
         # 保持最多10個
         if len(self.history) > 10:
             self.history = self.history[-10:]
+
+    def reset_result_to_waiting(self) -> None:
+        """重置結果區域為等待狀態（當新一輪開始時）"""
+        self.result_label.setText("<span style='color: #6b7280;'>上手結果: 等待觸發...</span>")
+        # 不清除 last_result，保留歷史記錄
+
+    def update_last_result(self, bet_direction: str, result: str, pnl: float) -> None:
+        """更新最後一次結果（永久顯示在結果區域）"""
+        print(f"[CompactLiveCard] update_last_result called: bet={bet_direction}, result={result}, pnl={pnl}")
+
+        direction_map = {"banker": "莊", "player": "閒", "tie": "和"}
+        bet_text = direction_map.get(bet_direction, bet_direction)
+        result_text = direction_map.get(result, result)
+
+        # 判斷輸贏
+        if pnl > 0:
+            outcome = "✓"
+            color = "#10b981"
+        elif pnl < 0:
+            outcome = "✗"
+            color = "#ef4444"
+        else:
+            outcome = "="
+            color = "#6b7280"
+
+        # 格式化結果顯示（簡潔版）
+        result_html = (
+            f"<span style='color: #6b7280;'>上手結果: </span>"
+            f"<span style='color: #d1d5db;'>{bet_text} → {result_text}</span> "
+            f"<span style='color: {color}; font-weight: bold;'>{outcome} {pnl:+.0f}</span>"
+        )
+
+        print(f"[CompactLiveCard] Setting result_label text: {result_html}")
+        self.result_label.setText(result_html)
+        self.last_result = {"bet": bet_direction, "result": result, "pnl": pnl}
+        print(f"[CompactLiveCard] result_label visibility: {self.result_label.isVisible()}")

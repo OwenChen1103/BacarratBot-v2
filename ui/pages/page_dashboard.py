@@ -418,6 +418,22 @@ class ResultsHistoryCard(QFrame):
             "round_id": round_id
         })
 
+        # ✅ 限制歷史記錄數量（避免長時間運行後內存膨脹）
+        max_history = 1000  # 最多保留 1000 局歷史
+        if len(self.results_history) > max_history:
+            # 移除最舊的記錄
+            removed_count = len(self.results_history) - max_history
+            self.results_history = self.results_history[-max_history:]
+
+            # 同時移除 UI 中最舊的 widget
+            for _ in range(removed_count):
+                widget_index = self.results_layout.count() - 1
+                if widget_index >= 0:
+                    widget = self.results_layout.itemAt(widget_index).widget()
+                    if widget:
+                        self.results_layout.removeWidget(widget)
+                        widget.deleteLater()
+
         # 創建結果項
         result_item = self._create_result_item(winner, timestamp, round_id, len(self.results_history))
 
@@ -1877,6 +1893,10 @@ class DashboardPage(QWidget):
                             is_new = False
                             break
 
+                # ✅ 只在真正有新結果時才記錄日誌
+                if is_new:
+                    self.log_viewer.add_log("INFO", "Dashboard", f"🆕 檢測到新結果: winner={winner}, round_id={round_id}")
+
                 if is_new and round_id:
                     # 確保 timestamp 是浮點數
                     if isinstance(timestamp, (int, float)):
@@ -1887,6 +1907,7 @@ class DashboardPage(QWidget):
                     else:
                         ts = time.time()
 
+                    self.log_viewer.add_log("INFO", "Dashboard", f"➕ 添加新結果到歷史卡片: winner={winner}, round_id={round_id}, ts={ts}")
                     self.results_history_card.add_result(winner, ts, round_id)
 
         self.latest_results = latest
@@ -1910,6 +1931,16 @@ class DashboardPage(QWidget):
             summary = {}
         self.line_summary = summary
 
+        # 調試：檢查 line_summary 內容（僅在 lines 數量變化時記錄）
+        if not hasattr(self, '_last_lines_count'):
+            self._last_lines_count = 0
+
+        current_lines_count = len(summary.get("lines", [])) if summary else 0
+        if current_lines_count != self._last_lines_count:
+            if summary and "lines" in summary:
+                self.log_viewer.add_log("INFO", "Dashboard", f"📋 line_summary 更新: {len(summary['lines'])} 條 lines")
+            self._last_lines_count = current_lines_count
+
         # ✅ 舊版策略狀態指示器已移除，新版精簡卡片會自動更新
         # self.update_strategy_status_display(summary)
 
@@ -1928,6 +1959,7 @@ class DashboardPage(QWidget):
                     info = latest.get("main")
                     if info and info.get("winner"):
                         winner = info.get("winner")
+                        self.log_viewer.add_log("INFO", "Dashboard", f"➕ 添加到路單歷史: winner={winner}")
                         self.compact_live_card.add_history(winner)
         except Exception as e:
             self.log_viewer.add_log("WARNING", "Dashboard", f"更新精簡卡片失敗: {e}")
@@ -1964,7 +1996,11 @@ class DashboardPage(QWidget):
                         round_id = result.get("round_id")
 
                         if winner:
+                            # ✅ 加入到開獎歷史卡片
                             self.results_history_card.add_result(winner, timestamp, round_id)
+                            # ✅ 也要加入到即時狀態卡片的路單歷史
+                            if hasattr(self, 'compact_live_card'):
+                                self.compact_live_card.add_history(winner)
                 else:
                     self.log_viewer.add_log("INFO", "Dashboard", "SignalTracker 中沒有 main 桌的歷史記錄")
             else:

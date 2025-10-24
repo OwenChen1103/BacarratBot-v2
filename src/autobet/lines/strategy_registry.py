@@ -268,17 +268,24 @@ class StrategyRegistry:
             [(strategy_key, StrategyDefinition), ...] 列表
 
         Note:
-            如果桌號沒有綁定任何策略，返回空列表
+            兼容性行為（與舊 orchestrator 一致）：
+            - 如果桌號已綁定策略，返回綁定的策略
+            - 如果桌號沒有綁定任何策略，**自動綁定並返回所有已註冊的策略**
+            這確保即使沒有明確綁定，結果也能被記錄到 SignalTracker
 
         Example:
             >>> for key, definition in registry.get_strategies_for_table("table1"):
             ...     print(f"{key}: {definition.entry.mode}")
         """
-        if table_id not in self._attachments:
-            return []
+        # 如果桌號沒有綁定策略，自動綁定所有策略（兼容舊行為）
+        if table_id not in self._attachments or not self._attachments[table_id]:
+            strategy_keys = list(self._strategies.keys())
+            if strategy_keys:
+                # 自動綁定所有策略到這個桌號
+                self._attachments[table_id] = strategy_keys.copy()
 
         result = []
-        for strategy_key in self._attachments[table_id]:
+        for strategy_key in self._attachments.get(table_id, []):
             definition = self._strategies.get(strategy_key)
             if definition:  # 防禦性檢查（理論上不應該為 None）
                 result.append((strategy_key, definition))

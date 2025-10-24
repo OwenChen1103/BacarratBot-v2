@@ -56,6 +56,14 @@ class SignalTracker:
                 return False
             self.last_trigger[dedup_key] = dedup_key
 
+            # ✅ 限制 STRICT 模式下的字典大小（避免長時間運行後內存膨脹）
+            max_dedup_keys = 1000  # 最多保留 1000 筆去重記錄
+            if len(self.last_trigger) > max_dedup_keys:
+                # 移除最舊的 100 筆（批量刪除以提高效率）
+                keys_to_remove = list(self.last_trigger.keys())[:100]
+                for key in keys_to_remove:
+                    self.last_trigger.pop(key, None)
+
         return True
 
     def _get_recent_winners(self, table_id: str, length: int) -> List[str]:

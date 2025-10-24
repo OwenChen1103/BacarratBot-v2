@@ -178,13 +178,19 @@ class EntryEvaluator:
 
         line_state = self._ensure_line_state(table_id, strategy_key)
 
-        # 檢查 1: Line 是否被凍結
+        # 檢查 1: Line 是否在等待結果
+        if line_state.phase == LinePhase.WAITING_RESULT:
+            return EntryEvaluationResult(
+                strategy_key, False, f"Waiting for result (round={line_state.last_round_id})"
+            )
+
+        # 檢查 2: Line 是否被凍結
         if line_state.frozen:
             return EntryEvaluationResult(
                 strategy_key, False, f"Line frozen until {line_state.frozen_until}"
             )
 
-        # 檢查 2: 風控封鎖
+        # 檢查 3: 風控封鎖
         if self.risk_coordinator and self.risk_coordinator.is_blocked(
             strategy_key, table_id, definition.metadata
         ):
@@ -192,7 +198,7 @@ class EntryEvaluator:
                 strategy_key, False, "Blocked by risk coordinator"
             )
 
-        # 檢查 3: 信號觸發
+        # 檢查 4: 信號觸發
         should_trigger_result = tracker.should_trigger(table_id, round_id, timestamp)
 
         if not should_trigger_result:
@@ -223,7 +229,7 @@ class EntryEvaluator:
         line_state.phase = LinePhase.ARMED
         line_state.armed_count += 1
 
-        # 檢查 4: 首次觸發層
+        # 檢查 5: 首次觸發層
         required_triggers = 1 if definition.entry.first_trigger_layer >= 1 else 2
         if line_state.armed_count < required_triggers:
             reason = f"Armed (count={line_state.armed_count}), waiting for first_trigger_layer"

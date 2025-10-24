@@ -212,6 +212,16 @@ class CompactStrategyInfoCard(QFrame):
 
         performance = snapshot.get("performance", {})
         if not performance:
+            # ✅ 即使沒有 performance 數據，也顯示初始狀態（避免一直顯示"等待運行數據..."）
+            self.line4_label.setText(
+                f"{Icons.STATS} 今日  "
+                f"<span style='color: {Colors.TEXT_IMPORTANT};'>0</span> 觸發  "
+                f"<span style='color: {Colors.TEXT_IMPORTANT};'>0</span> 進場  "
+                f"<span style='color: {Colors.SUCCESS_500};'>0</span>勝 "
+                f"<span style='color: {Colors.ERROR_500};'>0</span>負  "
+                f"<b style='color: {Colors.TEXT_MUTED}; font-family: {FontStyle.FAMILY_MONO};'>0</b>元  "
+                f"<span style='color: {Colors.TEXT_MUTED};'>(0%)</span>"
+            )
             return
 
         triggers = performance.get("triggers", 0)

@@ -212,7 +212,14 @@ class CompactLiveCard(QFrame):
         """顯示：待機狀態"""
         self.line1_label.setText(f"{Icons.IDLE} 等待啟動...")
         self.line1_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; padding: 4px;")
-        self.line2_label.setText("路單  等待數據...")
+
+        # ✅ 顯示已有的路單歷史（如果有的話）
+        if self.history:
+            history_html = self._format_history_html()
+            self.line2_label.setText(f"路單  {history_html}")
+        else:
+            self.line2_label.setText("路單  等待數據...")
+
         self.pnl_label.setText(f"{Icons.MONEY} 等待數據...")
         self.layer_progress.setValue(0)
         self.layer_progress.setFormat("層級 0/3")
@@ -440,6 +447,10 @@ class CompactLiveCard(QFrame):
 
         Args:
             winner: 開獎結果 (B/P/T)
+
+        Note:
+            顯示更新由 update_from_snapshot() 負責（每秒調用一次）
+            這樣可以保持狀態一致性，避免手動更新導致的顯示問題
         """
         self.history.append(winner)
         # 保持最多10個

@@ -122,12 +122,19 @@ class RiskCoordinator(RiskCoordinatorProtocol):
                outcome: LayerOutcome, metadata: Dict) -> List:
         return []
 
-    def snapshot(self) -> Dict[str, Any]:
-        """獲取風控狀態快照（用於 EngineWorker）"""
-        return {
-            "blocked_count": len(self._blocked),
-            "blocked_strategies": list(self._blocked)
-        }
+    def snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """獲取風控狀態快照（用於 EngineWorker）
+
+        返回格式: Dict[scope_key, tracker_data]
+        - scope_key: 例如 "table:strategy"
+        - tracker_data: {"pnl": 0.0, "loss_streak": 0, "frozen": False, ...}
+
+        注意：這是佔位符實現，沒有實際追蹤 PnL
+        實際 PnL 應該從 PositionManager 獲取
+        """
+        # 返回空字典，因為這個簡化版本沒有追蹤任何狀態
+        # EngineWorker 會遍歷這個字典累加 pnl，空字典意味著 pnl = 0
+        return {}
 
 
 class LineOrchestrator:
@@ -247,17 +254,24 @@ class LineOrchestrator:
         round_id: Optional[str],
         phase: TablePhase,
         timestamp: float,
+        generate_decisions: bool = False,
     ) -> List[BetDecision]:
-        """更新桌號階段並生成決策
+        """更新桌號階段並（可選）生成決策
 
         Args:
             table_id: 桌號
             round_id: 局號（可選）
             phase: 新階段
             timestamp: 時間戳
+            generate_decisions: 是否生成決策（預設 False）
 
         Returns:
-            下注決策列表（僅在 BETTABLE 階段返回）
+            下注決策列表（僅在 BETTABLE 階段且 generate_decisions=True 時返回）
+
+        Note:
+            ✅ 新邏輯：階段更新和決策生成分離
+            - GameStateManager 的計時器只更新階段（generate_decisions=False）
+            - 只有在「檢測到可下注畫面」時才生成決策（generate_decisions=True）
         """
         # 開始追蹤階段轉換性能
         phase_op_id = f"phase_{table_id}_{phase.value}_{time.time()}"
@@ -270,8 +284,8 @@ class LineOrchestrator:
         self.risk.refresh()
 
         decisions = []
-        if phase == TablePhase.BETTABLE and round_id:
-            # 評估策略並生成決策
+        if phase == TablePhase.BETTABLE and round_id and generate_decisions:
+            # 評估策略並生成決策（只在明確要求時）
             decisions = self._evaluate_and_decide(table_id, round_id, timestamp)
 
         # 結束階段轉換追蹤
@@ -418,6 +432,37 @@ class LineOrchestrator:
         )
 
         return final_decisions
+
+    def mark_strategies_waiting(
+        self,
+        table_id: str,
+        round_id: str,
+        strategy_keys: List[str],
+    ) -> None:
+        """
+        標記策略為等待結果狀態
+
+        當下注決策被執行後，需要將對應的策略標記為 WAITING_RESULT 階段，
+        這樣下一次收到的結果會被用於結算，而不是作為新的信號輸入。
+
+        Args:
+            table_id: 桌號
+            round_id: 局號
+            strategy_keys: 需要標記的策略列表
+        """
+        if not self.entry_evaluator:
+            return
+
+        for strategy_key in strategy_keys:
+            line_state = self.entry_evaluator.get_line_state(table_id, strategy_key)
+            if line_state:
+                line_state.mark_waiting()
+                line_state.last_round_id = round_id
+                self._record_event(
+                    "DEBUG",
+                    f"📝 策略標記為等待結果: {strategy_key} | table={table_id} | round={round_id}",
+                    {"table": table_id, "round": round_id, "strategy": strategy_key},
+                )
 
     # ===== 結果處理 =====
 
@@ -613,7 +658,95 @@ class LineOrchestrator:
     # ===== 狀態查詢 =====
 
     def snapshot(self) -> Dict[str, Any]:
-        """獲取協調器狀態快照（調試用）"""
+        """獲取協調器狀態快照（調試用 + UI 顯示）
+
+        返回格式兼容舊版 orchestrator，包含 UI 需要的 "lines" 格式
+        """
+        # ✅ 生成 UI 兼容的 "lines" 格式
+        lines = []
+        if self.entry_evaluator:
+            for table_id, states in self.entry_evaluator.line_states.items():
+                for strategy_key, state in states.items():
+                    # 獲取策略定義以提取方向
+                    strategy_def = self.registry.get_strategy(strategy_key)
+                    direction = "unknown"
+                    if strategy_def and strategy_def.entry and strategy_def.entry.pattern:
+                        # 從 pattern 推斷方向
+                        # pattern 格式: "PP" -> player, "BB" -> banker, "T" -> tie
+                        # 取最後一個字符作為方向
+                        last_char = strategy_def.entry.pattern[-1].upper()
+                        if last_char == 'P':
+                            direction = "player"
+                        elif last_char == 'B':
+                            direction = "banker"
+                        elif last_char == 'T':
+                            direction = "tie"
+
+                    # 獲取當前層級和賭注信息
+                    current_layer = state.armed_count
+                    max_layer = 3  # 預設最大層級
+                    stake = 0.0  # TODO: 從 PositionManager 獲取實際賭注
+
+                    if strategy_def and strategy_def.staking:
+                        max_layer = len(strategy_def.staking.sequence)
+                        if current_layer > 0 and current_layer <= len(strategy_def.staking.sequence):
+                            stake = float(strategy_def.staking.sequence[current_layer - 1])
+
+                    lines.append({
+                        "table": table_id,
+                        "strategy": strategy_key,
+                        "phase": state.phase.value,  # "idle", "armed", "waiting"
+                        "direction": direction,
+                        "armed_count": state.armed_count,
+                        "frozen": state.frozen,
+                        # ✅ UI 層級顯示需要的字段
+                        "current_layer": current_layer,
+                        "max_layer": max_layer,
+                        "stake": stake,
+                    })
+
+        # ✅ 生成 UI 兼容的 "risk" 格式（PnL 顯示）
+        risk_data = {}
+        if self.position_manager:
+            # 獲取全局統計數據
+            stats = self.position_manager.get_statistics()
+            global_pnl = stats.get("total_pnl", 0.0)
+
+            pos_snapshot = self.position_manager.snapshot()
+            # 提取所有 table 的 PnL（從 settlement history 計算）
+            for table_id in pos_snapshot.get("by_table", {}).keys():
+                # 計算該桌的 PnL（從結算歷史中篩選）
+                table_pnl = sum(
+                    r.pnl_delta
+                    for r in self.position_manager._settlement_history
+                    if r.position.table_id == table_id
+                )
+                risk_data[f"table:{table_id}"] = {"pnl": round(table_pnl, 2)}
+
+            # 全局 PnL
+            risk_data["global_day"] = {"pnl": round(global_pnl, 2)}
+
+        # ✅ 生成 UI 兼容的 "performance" 格式（策略資訊卡片需要）
+        performance_data = {}
+        if self.position_manager:
+            stats = self.position_manager.get_statistics()
+            # 從 metrics 獲取觸發和進場次數
+            triggers = 0
+            entries = 0
+            if self.metrics:
+                # TODO: 從 MetricsAggregator 獲取實際觸發和進場次數
+                # 目前簡化為使用結算數量作為進場次數
+                entries = stats.get("total_settled", 0)
+
+            performance_data = {
+                "triggers": triggers,
+                "entries": entries,
+                "wins": stats.get("win_count", 0),
+                "losses": stats.get("loss_count", 0),
+                "total_pnl": stats.get("total_pnl", 0.0),
+                "win_rate": stats.get("win_rate", 0.0),
+            }
+
         return {
             "total_strategies": self.registry.count(),
             "total_pending_positions": self.position_manager.count_pending(),
@@ -624,6 +757,10 @@ class LineOrchestrator:
             "registry_snapshot": self.registry.snapshot(),
             "position_manager_snapshot": self.position_manager.snapshot(),
             "evaluator_snapshot": self.entry_evaluator.snapshot() if self.entry_evaluator else {},
+            # ✅ UI 兼容格式
+            "lines": lines,
+            "risk": risk_data,
+            "performance": performance_data,
         }
 
     def get_statistics(self) -> Dict[str, Any]:
@@ -692,3 +829,15 @@ class LineOrchestrator:
         if self.entry_evaluator:
             return self.entry_evaluator.line_states
         return {}
+
+    @property
+    def strategies(self) -> Dict[str, StrategyDefinition]:
+        """委託給 StrategyRegistry 的策略字典（用於 EngineWorker 兼容性）
+
+        注意：這是一個兼容性屬性
+        實際策略管理由 StrategyRegistry 負責
+
+        Returns:
+            {strategy_key: StrategyDefinition} 字典
+        """
+        return self.registry._strategies

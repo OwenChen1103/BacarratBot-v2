@@ -243,6 +243,7 @@ class EngineWorker(QThread):
                 # 不再在此處執行檢測，避免與 Dashboard 重複檢測
 
                 # 發送引擎狀態
+                latest_snapshot = self._latest_results_snapshot()
                 status = {
                     "current_state": current_state,
                     "enabled": self._enabled,
@@ -251,9 +252,15 @@ class EngineWorker(QThread):
                     "net": getattr(self, '_net_profit', 0),
                     "last_winner": getattr(self, '_last_winner', None),
                     "detection_enabled": self._detection_enabled,
-                    "latest_results": self._latest_results_snapshot(),
+                    "latest_results": latest_snapshot,
                     "line_summary": self._line_summary,
                 }
+                # 每10次才輸出一次調試日誌，避免刷屏
+                if not hasattr(self, '_status_push_count'):
+                    self._status_push_count = 0
+                self._status_push_count += 1
+                if self._status_push_count % 10 == 0:
+                    self._emit_log("DEBUG", "Status", f"📤 [定期] 推送狀態到 UI: latest_results keys={list(latest_snapshot.keys())}, 數量={len(latest_snapshot)}")
                 self.engine_status.emit(status)
 
             except Exception as e:
@@ -340,9 +347,16 @@ class EngineWorker(QThread):
     def _load_real_configs(self) -> bool:
         """載入真實的配置檔案"""
         try:
-            # 載入 UI 配置 (空字典，使用預設值)
-            self.engine.load_ui_config({})
-            self._emit_log("INFO", "Config", "✅ UI 配置載入完成（使用預設值）")
+            # 載入 UI 配置
+            ui_config = {}
+            if os.path.exists("configs/ui_config.json"):
+                with open("configs/ui_config.json", "r", encoding="utf-8") as f:
+                    ui_config = json.load(f)
+                self._emit_log("INFO", "Config", "UI 配置載入成功")
+            else:
+                self._emit_log("WARNING", "Config", "未找到 ui_config.json，使用預設值")
+
+            self.engine.load_ui_config(ui_config)
 
             # 載入 positions.json
             if os.path.exists("configs/positions.json"):
@@ -461,14 +475,29 @@ class EngineWorker(QThread):
                     else:
                         ts_sec = time.time()
 
+                    # 🔥 關鍵修正：結算時應該使用「上一局」的 round_id
+                    # 因為：
+                    # - 當前 round_id 是新結果創建的新局（round-main-T3）
+                    # - 但倉位是用上一局的 round_id 創建的（round-main-T1）
+                    # - 所以需要用上一局的 round_id 來結算
+                    settlement_round_id = round_id  # 預設使用當前
+                    if self._game_state:
+                        history = self._game_state.round_history.get(table_id, [])
+                        if len(history) >= 2:
+                            # 倒數第二個是上一局（倒數第一個是剛創建的新局）
+                            previous_round = history[-2]
+                            settlement_round_id = previous_round.round_id
+                            self._emit_log("DEBUG", "Engine",
+                                          f"📝 使用上一局進行結算: {settlement_round_id} (當前局: {round_id})")
+
                     self._emit_log("DEBUG", "Engine", f"📞 調用 handle_result: table={table_id} winner={winner}")
-                    self._line_orchestrator.handle_result(table_id, round_id, winner, ts_sec)
+                    self._line_orchestrator.handle_result(table_id, settlement_round_id, winner, ts_sec)
                     self._line_summary = self._line_orchestrator.snapshot()
                     self._save_line_state()
                     self._flush_line_events()
 
-                    # 🔥 新增: 發送「結果已計算」信號
-                    self._emit_result_settled_signal(table_id, round_id, winner)
+                    # 🔥 新增: 發送「結果已計算」信號（使用 settlement_round_id）
+                    self._emit_result_settled_signal(table_id, settlement_round_id, winner)
 
                     # 階段檢測現在由 PhaseDetector 自動處理
                     # PhaseDetector 會在 SETTLING → BETTABLE → LOCKED 的適當時機
@@ -519,12 +548,16 @@ class EngineWorker(QThread):
         """儲存最新結果（內部統一使用 canonical ID）"""
         table_id = event.get("table_id")
         if not table_id:
+            self._emit_log("DEBUG", "Result", f"⚠️ _store_latest_result: table_id 為空")
             return
 
         # 使用 canonical ID 作為唯一 key
         canonical_id = self._normalize_table_id(table_id)
         if not canonical_id:
+            self._emit_log("DEBUG", "Result", f"⚠️ _store_latest_result: canonical_id 為空 (table_id={table_id})")
             return
+
+        self._emit_log("DEBUG", "Result", f"📝 _store_latest_result: table_id={table_id} → canonical_id={canonical_id}")
         round_id = event.get("round_id")
         round_str = str(round_id) if round_id is not None else None
 
@@ -551,6 +584,7 @@ class EngineWorker(QThread):
         # 將最新資料移到字典尾端維持近序（只用 canonical ID）
         self._latest_results.pop(canonical_id, None)
         self._latest_results[canonical_id] = info
+        self._emit_log("DEBUG", "Result", f"✅ 已存儲最新結果: key={canonical_id}, winner={info.get('winner')}, _latest_results 數量={len(self._latest_results)}")
 
         # 限制最多保留 20 個桌號
         max_tables = 20
@@ -566,6 +600,7 @@ class EngineWorker(QThread):
     def _push_status_immediately(self):
         """立即推送狀態到UI（不等200ms迴圈）"""
         current_state = "running" if self._enabled else "idle"
+        latest_snapshot = self._latest_results_snapshot()
         status = {
             "current_state": current_state,
             "enabled": self._enabled,
@@ -574,8 +609,9 @@ class EngineWorker(QThread):
             "net": getattr(self, '_net_profit', 0),
             "last_winner": getattr(self, '_last_winner', None),
             "detection_enabled": self._detection_enabled,
-            "latest_results": self._latest_results_snapshot(),
+            "latest_results": latest_snapshot,
         }
+        self._emit_log("DEBUG", "Status", f"📤 推送狀態到 UI: latest_results keys={list(latest_snapshot.keys())}, 數量={len(latest_snapshot)}")
         self.engine_status.emit(status)
 
     def _emit_log(self, level: str, module: str, msg: str):
@@ -702,11 +738,11 @@ class EngineWorker(QThread):
 
     def _emit_result_settled_signal(self, table_id: str, round_id: str, winner: str) -> None:
         """
-        發送結果已計算信號 (查找剛剛結算的 Line 並計算 PnL)
+        發送結果已計算信號
 
         Args:
             table_id: 桌號
-            round_id: 局號
+            round_id: 局號（用於結算的 round_id）
             winner: 開獎結果 ("B" | "P" | "T")
         """
         if not self._line_orchestrator:
@@ -715,59 +751,40 @@ class EngineWorker(QThread):
         try:
             from src.autobet.lines.state import LayerOutcome
 
-            # 遍歷該桌的所有策略，找到剛剛結算的
-            for strategy_key, line_state in self._line_orchestrator.line_states.get(table_id, {}).items():
-                # 檢查是否有最近的結果
-                if hasattr(line_state, 'layer_state') and line_state.layer_state.outcome:
-                    outcome = line_state.layer_state.outcome
+            # ✅ 方法1：從 PositionManager 的結算歷史中查找
+            # 這是最可靠的方法，因為結算已經完成，數據已經在歷史中
+            position_manager = self._line_orchestrator.position_manager
+            if position_manager and position_manager._settlement_history:
+                # 查找最近的結算記錄（應該就是剛剛結算的）
+                for settlement in reversed(position_manager._settlement_history):
+                    if settlement.position.table_id == table_id and settlement.position.round_id == round_id:
+                        # 找到了！
+                        outcome_map = {
+                            LayerOutcome.WIN: "win",
+                            LayerOutcome.LOSS: "loss",
+                            LayerOutcome.SKIPPED: "skip",
+                            LayerOutcome.CANCELLED: "skip",
+                        }
+                        outcome_str = outcome_map.get(settlement.outcome, "skip")
+                        pnl = settlement.pnl_delta
 
-                    # 映射 LayerOutcome 到字符串
-                    outcome_map = {
-                        LayerOutcome.WIN: "win",
-                        LayerOutcome.LOSS: "loss",
-                        LayerOutcome.SKIPPED: "skip",
-                        LayerOutcome.CANCELLED: "skip",
-                    }
-                    outcome_str = outcome_map.get(outcome, "skip")
+                        # 發送信號
+                        print(f"[EngineWorker] ★★★ Emitting result_settled signal: outcome={outcome_str}, pnl={pnl}")
+                        self.result_settled.emit(outcome_str, pnl)
+                        print(f"[EngineWorker] result_settled signal emitted successfully")
+                        self._emit_log("INFO", "Engine",
+                                      f"📊 result_settled 信號已發送: {outcome_str} PnL={pnl:+.0f} "
+                                      f"(strategy={settlement.position.strategy_key})")
+                        return  # 找到了就返回
 
-                    # 計算 PnL (使用 PayoutManager)
-                    from src.autobet.payout_manager import PayoutManager
-                    pm = PayoutManager()
-
-                    stake = abs(line_state.layer_state.stake)
-
-                    # 獲取下注方向 (從 _pending 或根據策略推斷)
-                    direction = "B"  # 預設值
-                    pending_key = (table_id, round_id, strategy_key)
-                    if pending_key in self._line_orchestrator._pending:
-                        position = self._line_orchestrator._pending[pending_key]
-                        direction = position.direction.value
-                    else:
-                        # 已經 pop 掉了，嘗試從歷史推斷
-                        # 簡化版：使用策略配置
-                        definition = self._line_orchestrator.strategies.get(strategy_key)
-                        if definition:
-                            # 從 pattern 解析方向
-                            pattern = definition.entry.pattern.upper()
-                            if "BET B" in pattern:
-                                direction = "B"
-                            elif "BET P" in pattern:
-                                direction = "P"
-                            elif "BET T" in pattern:
-                                direction = "T"
-
-                    # 計算 PnL
-                    pnl = pm.calculate_pnl(stake, outcome.name, direction)
-
-                    # 發送信號
-                    self.result_settled.emit(outcome_str, pnl)
-                    self._emit_log("DEBUG", "Engine", f"📊 result_settled 信號已發送: {outcome_str} PnL={pnl:+.0f}")
-
-                    # 只處理第一個找到的結果
-                    break
+            # ✅ 方法2：如果歷史中沒找到，記錄警告
+            self._emit_log("WARNING", "Engine",
+                          f"⚠️ 在結算歷史中未找到 round_id={round_id} 的記錄，無法發送 result_settled 信號")
 
         except Exception as e:
-            self._emit_log("ERROR", "Engine", f"發送 result_settled 信號錯誤: {e}")
+            import traceback
+            error_details = traceback.format_exc()
+            self._emit_log("ERROR", "Engine", f"發送 result_settled 信號錯誤: {e}\n{error_details}")
 
     def force_test_sequence(self):
         """強制測試點擊順序"""
@@ -785,19 +802,99 @@ class EngineWorker(QThread):
         threading.Thread(target=_run, name="ForceTestSequence", daemon=True).start()
 
     def trigger_click_sequence_async(self):
-        """在背景執行點擊序列，避免阻塞 UI 線程"""
+        """
+        在背景執行點擊序列，避免阻塞 UI 線程
+
+        ✅ 新邏輯：檢測到可下注畫面時
+        1. 生成新的 round_id
+        2. 通知 LineOrchestrator 進入 BETTABLE 階段並生成決策
+        3. 執行下注決策
+        4. 標記該回合為 'waiting' 狀態
+        """
         if not self.engine:
             self._emit_log("ERROR", "Engine", "引擎未初始化")
             return
 
         def _run():
-            self._emit_log("INFO", "Engine", "✅ 開始執行點擊序列")
+            self._emit_log("INFO", "Engine", "✅ 檢測到可下注畫面，開始處理")
+
             try:
+                # 1️⃣ 獲取當前局的 round_id（應該已經在 BETTABLE 階段）
+                timestamp = time.time()
+                table_id = "main"  # 單桌模式
+
+                # 從 GameStateManager 獲取當前局
+                current_round = None
+                if self._game_state:
+                    current_round = self._game_state.get_current_round(table_id)
+
+                if current_round:
+                    round_id = current_round.round_id
+                    self._emit_log("DEBUG", "Engine",
+                                  f"📝 使用當前回合: table={table_id}, round_id={round_id}, phase={current_round.phase.value}")
+                else:
+                    # 如果沒有當前局（不應該發生），生成一個臨時 ID
+                    round_id = f"round-{table_id}-{int(timestamp * 1000)}"
+                    self._emit_log("WARNING", "Engine",
+                                  f"⚠️ 當前沒有局，生成臨時 round_id: {round_id}")
+
+                # 2️⃣ 通知 LineOrchestrator 進入 BETTABLE 階段並生成決策
+                if not self._line_orchestrator:
+                    self._emit_log("ERROR", "Engine", "LineOrchestrator 未初始化")
+                    return
+
+                from src.autobet.lines.orchestrator import TablePhase
+                decisions = self._line_orchestrator.update_table_phase(
+                    table_id=table_id,
+                    round_id=round_id,
+                    phase=TablePhase.BETTABLE,
+                    timestamp=timestamp,
+                    generate_decisions=True  # ✅ 明確要求生成決策
+                )
+
+                if not decisions:
+                    self._emit_log("INFO", "Engine", "📭 無需下注（策略未觸發或已凍結）")
+                    # 仍然執行點擊序列（確保點擊框消失）
+                    triggered = self.engine.trigger_if_open()
+                    if not triggered:
+                        self._emit_log("WARNING", "Engine", "⚠️ 點擊序列執行失敗")
+                    return
+
+                # 3️⃣ 將下注決策加入執行隊列
+                self._emit_log("INFO", "Engine",
+                              f"🎯 收到 {len(decisions)} 個下注決策，加入執行隊列")
+
+                strategy_keys_to_mark = []
+                for decision in decisions:
+                    self._emit_log("INFO", "Engine",
+                                  f"📥 加入隊列: {decision.direction.value} ${decision.amount} "
+                                  f"(策略={decision.strategy_key}, 層級={decision.layer_index})")
+
+                    # 加入執行隊列（由 _tick() 循環處理）
+                    self._line_order_queue.put(decision)
+                    strategy_keys_to_mark.append(decision.strategy_key)
+
+                # 4️⃣ 標記策略為 'waiting' 狀態（在下注前標記，避免重複觸發）
+                if strategy_keys_to_mark:
+                    self._line_orchestrator.mark_strategies_waiting(
+                        table_id=table_id,
+                        round_id=round_id,
+                        strategy_keys=strategy_keys_to_mark
+                    )
+                    self._emit_log("INFO", "Engine",
+                                  f"📝 已標記 {len(strategy_keys_to_mark)} 個策略為等待結果狀態")
+
+                # 5️⃣ 執行點擊序列
                 triggered = self.engine.trigger_if_open()
                 if not triggered:
                     self._emit_log("WARNING", "Engine", "⚠️ 點擊序列執行失敗")
+                else:
+                    self._emit_log("INFO", "Engine", "✅ 點擊序列執行完成")
+
             except Exception as e:
-                self._emit_log("ERROR", "Engine", f"觸發點擊序列錯誤: {e}")
+                import traceback
+                error_details = traceback.format_exc()
+                self._emit_log("ERROR", "Engine", f"觸發下注錯誤: {e}\n{error_details}")
 
         threading.Thread(target=_run, name="TriggerClickSequence", daemon=True).start()
 
@@ -944,16 +1041,15 @@ class EngineWorker(QThread):
             self._emit_log("DEBUG", "GameStateManager",
                           f"階段變化: table={table_id} round={round_id} phase={phase}")
 
-            # 通知 LineOrchestrator 階段變化，並接收決策
-            decisions = self._line_orchestrator.update_table_phase(
+            # ✅ 修改：只更新階段狀態，不在這裡生成決策
+            # 決策應該在「檢測到可下注畫面」時才生成
+            # 這裡只通知 LineOrchestrator 更新內部狀態（用於 UI 顯示）
+            self._line_orchestrator.update_table_phase(
                 table_id, round_id, table_phase, timestamp
             )
 
-            # 如果有決策產生，執行下注
-            if decisions:
-                self._emit_log("INFO", "GameStateManager",
-                              f"✅ 階段 {phase} 觸發 {len(decisions)} 個下注決策")
-                self._handle_line_decisions(decisions)
+            self._emit_log("DEBUG", "GameStateManager",
+                          f"📝 階段已更新（不觸發下注），等待畫面檢測")
 
             # 更新狀態
             self._line_summary = self._line_orchestrator.snapshot()
@@ -1115,6 +1211,9 @@ class EngineWorker(QThread):
         self._emit_log("INFO", "ResultDetector", "檢測循環已啟動 (200ms)")
         self._emit_log("INFO", "ResultDetector", "💡 啟動後將從新結果開始記錄")
 
+        # 立即推送狀態更新到 UI
+        self._push_status_immediately()
+
     def _on_detection_tick(self) -> None:
         """檢測循環回調"""
         if not self._detection_enabled or not self._result_detector:
@@ -1212,9 +1311,14 @@ class EngineWorker(QThread):
             timestamp = time.time()
 
         if phase:
+            self._emit_log("DEBUG", "Phase", f"🔄 階段轉換: table={table_id} round={round_id} phase={phase.value}")
             decisions = self._line_orchestrator.update_table_phase(table_id, round_id, phase, timestamp)
+            self._emit_log("DEBUG", "Phase", f"💡 生成 {len(decisions)} 個決策")
             if decisions:
+                self._emit_log("INFO", "Phase", f"✅ 發現決策，開始處理")
                 self._handle_line_decisions(decisions)
+            else:
+                self._emit_log("DEBUG", "Phase", f"⚠️ 沒有決策生成 (phase={phase.value})")
         if self._line_orchestrator:
             self._line_summary = self._line_orchestrator.snapshot()
             self._save_line_state()
@@ -1308,11 +1412,15 @@ class EngineWorker(QThread):
         try:
             # 轉換方向：BetDirection -> target string
             direction_map = {
-                "BANKER": "banker",
+                "B": "banker",
+                "P": "player",
+                "T": "tie",
+                "BANKER": "banker",  # 向後兼容
                 "PLAYER": "player",
                 "TIE": "tie"
             }
             target = direction_map.get(decision.direction.value, decision.direction.value.lower())
+            self._emit_log("DEBUG", "Line", f"🔄 方向轉換: {decision.direction.value} -> {target}")
 
             # 檢查下注期是否開放
             if self._line_orchestrator:
@@ -1395,9 +1503,11 @@ class EngineWorker(QThread):
                             # 點擊下注區
                             bet_desc = f"點擊下注區 {target}"
                             self._emit_log("DEBUG", "Line", f"  [{step_info}] {bet_desc}")
+                            self._emit_log("DEBUG", "Line", f"  [DEBUG] 準備調用 click_bet('{target}')")
                             execution_log.append(("bet", target))
 
                             bet_result = self.engine.act.click_bet(target)
+                            self._emit_log("DEBUG", "Line", f"  [DEBUG] click_bet 返回: {bet_result}")
                             if not bet_result and not is_dry_run:
                                 raise Exception(f"{step_info} 失敗: {bet_desc}")
 

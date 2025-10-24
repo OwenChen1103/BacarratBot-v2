@@ -1,0 +1,18 @@
+{
+  "click": {
+    "move_delay_ms": [500, 700],
+    "click_delay_ms": [200, 350],
+    "jitter_px": 3,
+    "between_chip_delay_ms": [400, 600],
+    "after_bet_button_delay_ms": [500, 800],
+    "after_confirm_delay_ms": [400, 600]
+  },
+  "description": {
+    "move_delay_ms": "滑鼠移動時間範圍（毫秒）[最小, 最大] - 500-700 平衡速度與可見度",
+    "click_delay_ms": "點擊後等待時間範圍（毫秒）[最小, 最大]",
+    "jitter_px": "點擊位置隨機偏移量（像素）",
+    "between_chip_delay_ms": "籌碼之間的延遲範圍（毫秒）[最小, 最大]",
+    "after_bet_button_delay_ms": "點擊下注按鈕後的延遲範圍（毫秒）[最小, 最大]",
+    "after_confirm_delay_ms": "點擊確認按鈕後的延遲範圍（毫秒）[最小, 最大]"
+  }
+}

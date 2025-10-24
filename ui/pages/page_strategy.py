@@ -52,6 +52,7 @@ from src.autobet.chip_planner import Chip, SmartChipPlanner, BettingPolicy
 from src.autobet.chip_profile_manager import ChipProfileManager
 
 from ..app_state import emit_toast
+from ..design_system import FontStyle, Colors, Spacing, StyleSheet  # ✅ 導入設計系統
 from ..widgets.pattern_input_widget import PatternInputWidget
 from ..widgets.visual_pattern_builder import VisualPatternBuilder
 from ..widgets.first_trigger_widget import FirstTriggerWidget
@@ -124,22 +125,21 @@ class RiskTableWidget(QTableWidget):
         self.verticalHeader().setVisible(False)
         self.setSelectionMode(QAbstractItemView.NoSelection)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1f2937;
-                border: 1px solid #374151;
-                color: #f3f4f6;
-                border-radius: 6px;
-            }
-            QHeaderView::section {
-                background-color: #1f2937;
-                color: #d1d5db;
-                padding: 6px;
-                border: 1px solid #374151;
-            }
-            """
-        )
+        # ✅ 使用設計系統顏色
+        self.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {Colors.BG_INPUT};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                color: {Colors.TEXT_CRITICAL};
+                border-radius: {Spacing.RADIUS_MD}px;
+            }}
+            QHeaderView::section {{
+                background-color: {Colors.BG_INPUT};
+                color: {Colors.TEXT_NORMAL};
+                padding: {Spacing.PADDING_SM}px;
+                border: 1px solid {Colors.BORDER_DEFAULT};
+            }}
+        """)
 
     def add_row(self, level: Optional[RiskLevelConfig] = None) -> None:
         row = self.rowCount()
@@ -267,73 +267,48 @@ class StrategyPage(QWidget):
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        # 設置整個頁面的統一風格，與首頁一致
-        self.setStyleSheet("""
-            StrategyPage {
-                background-color: #1b2536;
-            }
-            QGroupBox {
-                background-color: #243047;
-                border: 1px solid #31415c;
-                border-radius: 10px;
-                margin-top: 20px;
-                padding-top: 18px;
-                font-weight: bold;
-                color: #e2e8f0;
-                font-size: 10.5pt;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
+        # ✅ 使用設計系統的統一風格
+        self.setStyleSheet(f"""
+            StrategyPage {{
+                background-color: {Colors.BG_TERTIARY};
+            }}
+            {StyleSheet.group_box()}
+            QGroupBox QWidget {{
                 background-color: transparent;
-            }
-            QGroupBox QWidget {
+            }}
+            QGroupBox QFrame {{
                 background-color: transparent;
-            }
-            QGroupBox QFrame {
+            }}
+            QLabel {{
                 background-color: transparent;
-            }
-            QLabel {
+                color: {Colors.TEXT_IMPORTANT};
+            }}
+            QRadioButton, QCheckBox {{
                 background-color: transparent;
-                color: #e5e7eb;
-            }
-            QRadioButton {
-                background-color: transparent;
-                color: #e5e7eb;
-            }
-            QCheckBox {
-                background-color: transparent;
-                color: #e5e7eb;
-            }
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-                background-color: #1f2937;
-                border: 1px solid #4b5563;
-                border-radius: 4px;
-                padding: 6px;
-                color: #e5e7eb;
-            }
-            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
-                border-color: #3b82f6;
-            }
+                color: {Colors.TEXT_IMPORTANT};
+            }}
+            {StyleSheet.input_field()}
         """)
 
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setSpacing(12)
-        header = QLabel("🧠 策略設定")
-        header.setFont(QFont("Microsoft YaHei UI", 18, QFont.Bold))
+        self.main_layout.setSpacing(Spacing.MARGIN_MD)  # ✅ 使用設計系統間距
+
+        # ✅ 優化標題：減小視覺權重（12pt 而非 18pt）
+        header = QLabel("策略設定")  # 移除 emoji
+        header.setFont(QFont(FontStyle.FAMILY_UI, FontStyle.SIZE_H1, QFont.Bold))  # 12pt
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet("""
-            QLabel {
-                background-color: #243047;
-                color: #e2e8f0;
-                border: 1px solid #31415c;
-                border-radius: 10px;
-                padding: 18px;
-            }
+        header.setStyleSheet(f"""
+            QLabel {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_CRITICAL};
+                border: 1px solid {Colors.BORDER_ELEVATED};
+                border-radius: {Spacing.RADIUS_LG}px;
+                padding: {Spacing.PADDING_MD}px;
+            }}
         """)
         self.main_layout.addWidget(header)
 
+        # ✅ 工具欄按鈕（統一使用幽靈按鈕樣式）
         toolbar = QHBoxLayout()
         self.reload_btn = QPushButton("重新整理")
         self.new_btn = QPushButton("新增策略")
@@ -341,7 +316,7 @@ class StrategyPage(QWidget):
         self.delete_btn = QPushButton("刪除策略")
         self.open_dir_btn = QPushButton("開啟資料夾")
         for btn in (self.reload_btn, self.new_btn, self.duplicate_btn, self.delete_btn, self.open_dir_btn):
-            btn.setStyleSheet("QPushButton { padding: 6px 12px; border-radius: 6px; background-color: #1f2937; color: #f3f4f6; }")
+            btn.setStyleSheet(StyleSheet.button_ghost())  # ✅ 統一樣式
         toolbar.addWidget(self.reload_btn)
         toolbar.addWidget(self.new_btn)
         toolbar.addWidget(self.duplicate_btn)
@@ -357,64 +332,67 @@ class StrategyPage(QWidget):
         list_container = QWidget()
         list_layout = QVBoxLayout(list_container)
         list_layout.setContentsMargins(0, 0, 0, 0)
-        list_layout.setSpacing(8)
+        list_layout.setSpacing(Spacing.MARGIN_SM)  # ✅ 使用設計系統間距
 
-        # 搜尋框
+        # ✅ 搜尋框（使用設計系統樣式）
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("🔍 搜尋策略...")
-        self.search_box.setStyleSheet("""
-            QLineEdit {
-                background-color: #1f2937;
-                border: 2px solid #374151;
-                color: #f3f4f6;
-                border-radius: 6px;
-                padding: 8px;
+        self.search_box.setPlaceholderText("搜尋策略...")  # 移除 emoji
+        self.search_box.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {Colors.BG_INPUT};
+                border: 2px solid {Colors.BORDER_DEFAULT};
+                color: {Colors.TEXT_CRITICAL};
+                border-radius: {Spacing.RADIUS_MD}px;
+                padding: {Spacing.PADDING_SM}px;
                 font-size: 10pt;
-            }
-            QLineEdit:focus {
-                border-color: #60a5fa;
-            }
+            }}
+            QLineEdit:focus {{
+                border-color: {Colors.BORDER_FOCUS};
+            }}
         """)
         self.search_box.textChanged.connect(self._filter_strategies)
         list_layout.addWidget(self.search_box)
 
-        # 標籤篩選
-        tag_filter_layout = QHBoxLayout()
+        # ✅ 標籤篩選與結果計數（使用設計系統）
+        filter_row = QHBoxLayout()
         tag_label = QLabel("標籤:")
-        tag_label.setStyleSheet("color: #9ca3af; font-size: 9pt;")
+        tag_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9pt;")
         self.tag_filter = QComboBox()
         self.tag_filter.addItem("全部", "")
-        self.tag_filter.setStyleSheet("""
-            QComboBox {
-                background-color: #1f2937;
-                border: 1px solid #374151;
-                color: #f3f4f6;
-                border-radius: 4px;
-                padding: 4px 8px;
-            }
-        """)
+        # ComboBox 樣式已在頁面級 input_field() 定義，無需重複
         self.tag_filter.currentIndexChanged.connect(self._filter_strategies)
-        tag_filter_layout.addWidget(tag_label)
-        tag_filter_layout.addWidget(self.tag_filter, 1)
-        list_layout.addLayout(tag_filter_layout)
+        filter_row.addWidget(tag_label)
+        filter_row.addWidget(self.tag_filter, 1)
 
-        # 策略列表
-        self.strategy_list = QListWidget()
-        self.strategy_list.setStyleSheet("""
-            QListWidget {
-                background-color: #1f2937;
-                border: 1px solid #374151;
-                color: #f3f4f6;
-                border-radius: 8px;
-            }
-            QListWidget::item {
-                padding: 8px;
-            }
-            QListWidget::item:selected {
-                background-color: #2563eb;
-                color: #ffffff;
-            }
+        # ✅ 清除篩選按鈕
+        self.clear_filter_btn = QPushButton("清除")
+        self.clear_filter_btn.setStyleSheet(f"""
+            QPushButton {{
+                padding: {Spacing.PADDING_XS}px {Spacing.PADDING_SM}px;
+                background-color: {Colors.BG_INPUT};
+                color: {Colors.TEXT_MUTED};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: {Spacing.RADIUS_SM}px;
+                font-size: 9pt;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BG_HOVER};
+                color: {Colors.TEXT_CRITICAL};
+            }}
         """)
+        self.clear_filter_btn.clicked.connect(self._clear_filters)
+        filter_row.addWidget(self.clear_filter_btn)
+        list_layout.addLayout(filter_row)
+
+        # ✅ 結果計數標籤
+        self.result_count_label = QLabel("顯示 0 個策略")
+        self.result_count_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9pt; padding: {Spacing.PADDING_XS}px;")
+        self.result_count_label.setAlignment(Qt.AlignRight)
+        list_layout.addWidget(self.result_count_label)
+
+        # ✅ 策略列表（使用設計系統）
+        self.strategy_list = QListWidget()
+        self.strategy_list.setStyleSheet(StyleSheet.list_widget())
         list_layout.addWidget(self.strategy_list)
 
         splitter.addWidget(list_container)
@@ -423,61 +401,38 @@ class StrategyPage(QWidget):
         detail_layout = QVBoxLayout(detail_container)
         detail_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 使用 Tab 分頁取代長滾動列表
+        # ✅ 使用設計系統的 Tab 樣式
         self.strategy_tabs = QTabWidget()
-        self.strategy_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 2px solid #4b5563;
-                border-radius: 6px;
-                background-color: #374151;
-                padding: 12px;
-            }
-            QTabBar::tab {
-                background-color: #1f2937;
-                color: #9ca3af;
-                padding: 12px 20px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                margin-right: 4px;
-                font-size: 11pt;
-                min-width: 100px;
-            }
-            QTabBar::tab:selected {
-                background-color: #2563eb;
-                color: #ffffff;
-                font-weight: bold;
-            }
-            QTabBar::tab:hover {
-                background-color: #374151;
-            }
-        """)
+        self.strategy_tabs.setStyleSheet(StyleSheet.tab_widget())
         detail_layout.addWidget(self.strategy_tabs)
 
-        # Tab 1: 基本資訊
-        self.tab_basic, self.tab_basic_layout = self._create_scrollable_tab()
-        self._build_metadata_section()
-        self.tab_basic_layout.addStretch()
-        self.strategy_tabs.addTab(self.tab_basic, "📝 基本資訊")
+        # ✅ Tab 順序調整：核心功能優先（移除 emoji）
 
-        # Tab 2: 進場條件
+        # Tab 1: 進場條件（最重要 - 放第一）
         self.tab_entry, self.tab_entry_layout = self._create_scrollable_tab()
         self._build_entry_section()
         self.tab_entry_layout.addStretch()
-        self.strategy_tabs.addTab(self.tab_entry, "🎯 進場條件")
+        self.strategy_tabs.addTab(self.tab_entry, "進場條件")
 
-        # Tab 3: 注碼管理
+        # Tab 2: 注碼管理
         self.tab_staking, self.tab_staking_layout = self._create_scrollable_tab()
         self._build_staking_section()
         self._build_cross_table_section()
         self.tab_staking_layout.addStretch()
-        self.strategy_tabs.addTab(self.tab_staking, "💰 注碼管理")
+        self.strategy_tabs.addTab(self.tab_staking, "注碼管理")
 
-        # Tab 4: 風險控制
+        # Tab 3: 風險控制
         self.tab_risk, self.tab_risk_layout = self._create_scrollable_tab()
         self._build_risk_section()
         self._build_validation_section()
         self.tab_risk_layout.addStretch()
-        self.strategy_tabs.addTab(self.tab_risk, "🛡️ 風險控制")
+        self.strategy_tabs.addTab(self.tab_risk, "風險控制")
+
+        # Tab 4: 基本資訊（元資料 - 放最後）
+        self.tab_basic, self.tab_basic_layout = self._create_scrollable_tab()
+        self._build_metadata_section()
+        self.tab_basic_layout.addStretch()
+        self.strategy_tabs.addTab(self.tab_basic, "進階設定")
 
         splitter.addWidget(detail_container)
         splitter.setSizes([220, 680])
@@ -491,26 +446,30 @@ class StrategyPage(QWidget):
         tab_layout = QVBoxLayout(tab)
         tab_layout.setContentsMargins(0, 0, 0, 0)
 
-        base_bg = "#243047"
-
+        # ✅ 使用設計系統顏色
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet(f"""
             QScrollArea {{
-                background-color: {base_bg};
+                background-color: {Colors.BG_ELEVATED};
                 border: none;
             }}
             QScrollArea > QWidget > QWidget {{
-                background-color: {base_bg};
+                background-color: {Colors.BG_ELEVATED};
             }}
         """)
-        scroll.viewport().setStyleSheet(f"background-color: {base_bg};")
+        scroll.viewport().setStyleSheet(f"background-color: {Colors.BG_ELEVATED};")
 
         scroll_widget = QWidget()
-        scroll_widget.setStyleSheet(f"background-color: {base_bg};")
+        scroll_widget.setStyleSheet(f"background-color: {Colors.BG_ELEVATED};")
         scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setSpacing(12)
-        scroll_layout.setContentsMargins(4, 4, 4, 4)
+        scroll_layout.setSpacing(Spacing.MARGIN_MD)  # ✅ 使用設計系統間距
+        scroll_layout.setContentsMargins(
+            Spacing.MARGIN_XS,
+            Spacing.MARGIN_XS,
+            Spacing.MARGIN_XS,
+            Spacing.MARGIN_XS
+        )
 
         scroll.setWidget(scroll_widget)
         tab_layout.addWidget(scroll)
@@ -521,15 +480,19 @@ class StrategyPage(QWidget):
         """建立動作按鈕列"""
         action_bar = QHBoxLayout()
 
-        # 模擬器按鈕
-        self.simulate_btn = QPushButton("🎮 測試模擬")
-        self.simulate_btn.setStyleSheet("QPushButton { padding: 8px 16px; border-radius: 6px; background-color: #7c3aed; color: white; font-weight: bold; }")
+        # ✅ 模擬器按鈕（強調色）
+        self.simulate_btn = QPushButton("測試模擬")  # 移除 emoji
+        self.simulate_btn.setStyleSheet(StyleSheet.button_accent())
 
+        # ✅ 主要動作按鈕（主色調）
         self.save_btn = QPushButton("儲存變更")
         self.save_as_btn = QPushButton("另存為...")
+        self.save_btn.setStyleSheet(StyleSheet.button_primary())
+        self.save_as_btn.setStyleSheet(StyleSheet.button_primary())
+
+        # ✅ 次要按鈕（幽靈樣式）
         self.revert_btn = QPushButton("還原")
-        for btn in (self.save_btn, self.save_as_btn, self.revert_btn):
-            btn.setStyleSheet("QPushButton { padding: 8px 16px; border-radius: 6px; background-color: #0e7490; color: white; }")
+        self.revert_btn.setStyleSheet(StyleSheet.button_ghost())
 
         action_bar.addWidget(self.simulate_btn)
         action_bar.addStretch()
@@ -555,61 +518,43 @@ class StrategyPage(QWidget):
         group = QGroupBox("📋 策略資訊")
         layout = QVBoxLayout(group)
 
-        # 描述
+        # ✅ 描述（樣式已在頁面級定義，無需重複）
         desc_layout = QFormLayout()
         self.description_edit = QLineEdit()
         self.description_edit.setPlaceholderText("簡短描述這個策略的用途...")
-        self.description_edit.setStyleSheet("""
-            QLineEdit {
-                background-color: #1f2937;
-                border: 1px solid #374151;
-                color: #f3f4f6;
-                border-radius: 4px;
-                padding: 6px;
-            }
-        """)
         desc_layout.addRow("描述:", self.description_edit)
         layout.addLayout(desc_layout)
 
-        # 標籤
+        # ✅ 標籤
         tags_layout = QHBoxLayout()
         tags_label = QLabel("標籤:")
-        tags_label.setStyleSheet("color: #f3f4f6; font-weight: bold;")
+        tags_label.setStyleSheet(f"color: {Colors.TEXT_CRITICAL}; font-weight: bold;")
         self.tags_edit = QLineEdit()
         self.tags_edit.setPlaceholderText("例如: 馬丁, 保守, 雙跳 (用逗號分隔)")
-        self.tags_edit.setStyleSheet("""
-            QLineEdit {
-                background-color: #1f2937;
-                border: 1px solid #374151;
-                color: #f3f4f6;
-                border-radius: 4px;
-                padding: 6px;
-            }
-        """)
         tags_layout.addWidget(tags_label)
         tags_layout.addWidget(self.tags_edit, 1)
         layout.addLayout(tags_layout)
 
-        # 預設標籤快捷按鈕
+        # ✅ 預設標籤快捷按鈕（統一樣式）
         quick_tags_layout = QHBoxLayout()
         quick_tags_label = QLabel("快速標籤:")
-        quick_tags_label.setStyleSheet("color: #9ca3af; font-size: 9pt;")
+        quick_tags_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9pt;")
         quick_tags_layout.addWidget(quick_tags_label)
 
         for tag in ["馬丁", "反馬丁", "固定注碼", "保守", "激進", "雙跳", "追龍"]:
             btn = QPushButton(tag)
-            btn.setStyleSheet("""
-                QPushButton {
-                    padding: 4px 10px;
-                    background-color: #1f2937;
-                    color: #60a5fa;
-                    border-radius: 4px;
-                    border: 1px solid #4b5563;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    padding: {Spacing.PADDING_XS}px {Spacing.PADDING_MD - 2}px;
+                    background-color: {Colors.BG_INPUT};
+                    color: {Colors.INFO_500};
+                    border-radius: {Spacing.RADIUS_SM}px;
+                    border: 1px solid {Colors.BORDER_DEFAULT};
                     font-size: 9pt;
-                }
-                QPushButton:hover {
-                    background-color: #4b5563;
-                }
+                }}
+                QPushButton:hover {{
+                    background-color: {Colors.BG_HOVER};
+                }}
             """)
             btn.clicked.connect(lambda checked, t=tag: self._add_quick_tag(t))
             quick_tags_layout.addWidget(btn)
@@ -635,47 +580,68 @@ class StrategyPage(QWidget):
         group = QGroupBox("進場設定")
         layout = QVBoxLayout(group)
 
-        # 模式切換 Tab
-        pattern_tabs = QTabWidget()
-        pattern_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #31415c;
-                border-radius: 8px;
-                background-color: #243047;
-            }
-            QTabBar::tab {
-                background-color: #1f2b3c;
-                color: #a5b4c7;
-                padding: 10px 18px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                margin-right: 4px;
-            }
-            QTabBar::tab:selected {
-                background-color: #2563eb;
-                color: #ffffff;
-                font-weight: bold;
-            }
-            QTabBar::tab:hover {
-                background-color: #4b5563;
-            }
-        """)
+        # ✅ 使用單選按鈕替換嵌套 Tab（減少導航層級）
+        mode_selector_layout = QHBoxLayout()
+        mode_label = QLabel("編輯模式:")
+        mode_label.setStyleSheet(f"color: {Colors.TEXT_CRITICAL}; font-weight: bold;")
 
-        # Tab 1: 視覺化建構器 (新增)
+        self.pattern_visual_btn = QPushButton("視覺化建構")
+        self.pattern_text_btn = QPushButton("文字輸入")
+
+        self.pattern_visual_btn.setCheckable(True)
+        self.pattern_text_btn.setCheckable(True)
+        self.pattern_visual_btn.setChecked(True)  # 預設視覺化模式
+
+        # 使用與模式切換一致的樣式
+        for btn in [self.pattern_visual_btn, self.pattern_text_btn]:
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    padding: {Spacing.PADDING_SM}px {Spacing.PADDING_LG}px;
+                    border-radius: {Spacing.RADIUS_MD}px;
+                    background-color: {Colors.BG_INPUT};
+                    color: {Colors.TEXT_MUTED};
+                    border: 2px solid {Colors.BORDER_DEFAULT};
+                }}
+                QPushButton:checked {{
+                    background-color: {Colors.PRIMARY_500};
+                    color: white;
+                    border: 2px solid {Colors.PRIMARY_600};
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background-color: {Colors.BG_HOVER};
+                }}
+            """)
+
+        self.pattern_visual_btn.clicked.connect(lambda: self._switch_pattern_mode("visual"))
+        self.pattern_text_btn.clicked.connect(lambda: self._switch_pattern_mode("text"))
+
+        mode_selector_layout.addWidget(mode_label)
+        mode_selector_layout.addWidget(self.pattern_visual_btn)
+        mode_selector_layout.addWidget(self.pattern_text_btn)
+        mode_selector_layout.addStretch()
+        layout.addLayout(mode_selector_layout)
+
+        # ✅ 使用 QStackedWidget 切換不同的編輯器（而非嵌套 Tab）
+        from PySide6.QtWidgets import QStackedWidget
+        self.pattern_stack = QStackedWidget()
+
+        # 視覺化建構器
         self.visual_pattern_builder = VisualPatternBuilder()
         self.visual_pattern_builder.pattern_changed.connect(self._on_visual_pattern_changed)
-        pattern_tabs.addTab(self.visual_pattern_builder, "🎨 視覺化建構")
+        self.pattern_stack.addWidget(self.visual_pattern_builder)
 
-        # Tab 2: 文字輸入 (原有)
+        # 文字輸入
         text_input_widget = QWidget()
         text_input_layout = QVBoxLayout(text_input_widget)
+        text_input_layout.setContentsMargins(0, 0, 0, 0)
         self.entry_pattern_widget = PatternInputWidget()
         self.entry_pattern_widget.pattern_changed.connect(self._on_text_pattern_changed)
         text_input_layout.addWidget(self.entry_pattern_widget)
         text_input_layout.addStretch()
-        pattern_tabs.addTab(text_input_widget, "⌨️ 文字輸入")
+        self.pattern_stack.addWidget(text_input_widget)
 
-        layout.addWidget(pattern_tabs)
+        layout.addWidget(self.pattern_stack)
 
         # 有效視窗
         form = QFormLayout()
@@ -694,6 +660,17 @@ class StrategyPage(QWidget):
         layout.addWidget(self.entry_first_trigger_widget)
 
         self.tab_entry_layout.addWidget(group)
+
+    def _switch_pattern_mode(self, mode: str) -> None:
+        """切換進場模式編輯器"""
+        if mode == "visual":
+            self.pattern_visual_btn.setChecked(True)
+            self.pattern_text_btn.setChecked(False)
+            self.pattern_stack.setCurrentIndex(0)  # 顯示視覺化建構器
+        else:  # text
+            self.pattern_visual_btn.setChecked(False)
+            self.pattern_text_btn.setChecked(True)
+            self.pattern_stack.setCurrentIndex(1)  # 顯示文字輸入
 
     def _on_visual_pattern_changed(self, pattern: str):
         """視覺化建構器的 pattern 改變"""
@@ -725,35 +702,35 @@ class StrategyPage(QWidget):
         group = QGroupBox("注碼序列")
         layout = QVBoxLayout(group)
 
-        # 模式切換（金額/單位）
+        # ✅ 模式切換（金額/單位）
         mode_layout = QHBoxLayout()
         mode_label = QLabel("序列模式:")
-        mode_label.setStyleSheet("font-weight: bold; color: #f3f4f6;")
-        self.mode_amount_radio = QPushButton("💰 金額模式 (推薦)")
-        self.mode_unit_radio = QPushButton("🔢 單位模式 (進階)")
+        mode_label.setStyleSheet(f"font-weight: bold; color: {Colors.TEXT_CRITICAL};")
+        self.mode_amount_radio = QPushButton("金額模式 (推薦)")  # 移除 emoji
+        self.mode_unit_radio = QPushButton("單位模式 (進階)")
 
         self.mode_amount_radio.setCheckable(True)
         self.mode_unit_radio.setCheckable(True)
         self.mode_amount_radio.setChecked(True)
 
         for btn in [self.mode_amount_radio, self.mode_unit_radio]:
-            btn.setStyleSheet("""
-                QPushButton {
-                    padding: 8px 16px;
-                    border-radius: 6px;
-                    background-color: #1f2937;
-                    color: #9ca3af;
-                    border: 2px solid #374151;
-                }
-                QPushButton:checked {
-                    background-color: #2563eb;
-                    color: #ffffff;
-                    border: 2px solid #3b82f6;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    padding: {Spacing.PADDING_SM}px {Spacing.PADDING_LG}px;
+                    border-radius: {Spacing.RADIUS_MD}px;
+                    background-color: {Colors.BG_INPUT};
+                    color: {Colors.TEXT_MUTED};
+                    border: 2px solid {Colors.BORDER_DEFAULT};
+                }}
+                QPushButton:checked {{
+                    background-color: {Colors.PRIMARY_500};
+                    color: white;
+                    border: 2px solid {Colors.PRIMARY_600};
                     font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #4b5563;
-                }
+                }}
+                QPushButton:hover {{
+                    background-color: {Colors.BG_HOVER};
+                }}
             """)
 
         self.mode_amount_radio.clicked.connect(lambda: self._switch_mode("amount"))
@@ -811,37 +788,37 @@ class StrategyPage(QWidget):
         form.addRow("同手策略:", self.stack_policy)
         layout.addLayout(form)
 
-        # 即時配方預覽
-        preview_group = QGroupBox("📋 即時下注配方預覽")
-        preview_group.setStyleSheet("""
-            QGroupBox {
-                background-color: #1f2937;
-                border: 2px solid #3b82f6;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 12px;
+        # ✅ 即時配方預覽（使用設計系統顏色）
+        preview_group = QGroupBox("即時下注配方預覽")  # 移除 emoji
+        preview_group.setStyleSheet(f"""
+            QGroupBox {{
+                background-color: {Colors.BG_INPUT};
+                border: 2px solid {Colors.INFO_500};
+                border-radius: {Spacing.RADIUS_LG}px;
+                margin-top: {Spacing.PADDING_MD}px;
+                padding-top: {Spacing.PADDING_MD}px;
                 font-weight: bold;
-                color: #60a5fa;
-            }
-            QGroupBox::title {
+                color: {Colors.INFO_500};
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
+                left: {Spacing.PADDING_MD - 2}px;
+                padding: 0 {Spacing.PADDING_SM - 3}px;
+            }}
         """)
         preview_layout = QVBoxLayout(preview_group)
 
-        self.recipe_preview_label = QLabel("請輸入序列以查看配方...")
+        self.recipe_preview_label = QLabel("輸入序列以預覽配方")
         self.recipe_preview_label.setWordWrap(True)
-        self.recipe_preview_label.setStyleSheet("""
-            QLabel {
-                color: #d1d5db;
-                padding: 12px;
-                background-color: #1f2937;
-                border-radius: 6px;
-                font-family: 'Consolas', 'Courier New', monospace;
+        self.recipe_preview_label.setStyleSheet(f"""
+            QLabel {{
+                color: {Colors.TEXT_NORMAL};
+                padding: {Spacing.PADDING_MD}px;
+                background-color: {Colors.BG_INPUT};
+                border-radius: {Spacing.RADIUS_MD}px;
+                font-family: '{FontStyle.FAMILY_MONO}', 'Courier New', monospace;
                 font-size: 10pt;
-            }
+            }}
         """)
         preview_layout.addWidget(self.recipe_preview_label)
 
@@ -861,13 +838,13 @@ class StrategyPage(QWidget):
         group = QGroupBox("跨桌設定")
         layout = QVBoxLayout(group)
 
-        # 共享範圍
+        # ✅ 共享範圍
         scope_layout = QFormLayout()
         self.cross_scope = QLineEdit()
         self.cross_scope.setPlaceholderText("例如: strategy_key (預設)")
         scope_hint = QLabel("💡 共享範圍決定哪些策略實例共用層數。預設 'strategy_key' 表示同一策略的所有實例共享。")
         scope_hint.setWordWrap(True)
-        scope_hint.setStyleSheet("color: #9ca3af; font-size: 9pt;")
+        scope_hint.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9pt;")
         scope_layout.addRow("共享範圍:", self.cross_scope)
         scope_layout.addRow(scope_hint)
         layout.addLayout(scope_layout)
@@ -882,20 +859,9 @@ class StrategyPage(QWidget):
         group = QGroupBox("風控階層")
         layout = QVBoxLayout(group)
 
-        # 範本按鈕
-        template_btn = QPushButton("🛡️ 使用風控範本")
-        template_btn.setStyleSheet("""
-            QPushButton {
-                padding: 8px 16px;
-                background-color: #2563eb;
-                color: white;
-                border-radius: 6px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #1d4ed8;
-            }
-        """)
+        # ✅ 範本按鈕（使用主要按鈕樣式）
+        template_btn = QPushButton("使用風控範本")  # 移除 emoji
+        template_btn.setStyleSheet(StyleSheet.button_primary())
         template_btn.clicked.connect(self._apply_risk_template)
         layout.addWidget(template_btn)
 
@@ -954,7 +920,7 @@ class StrategyPage(QWidget):
         self.tag_filter.addItem("全部", "")
 
         for tag in sorted(all_tags):
-            self.tag_filter.addItem(f"🏷️ {tag}", tag)
+            self.tag_filter.addItem(f"# {tag}", tag)
 
         # 恢復選擇
         idx = self.tag_filter.findData(current_filter)
@@ -992,11 +958,25 @@ class StrategyPage(QWidget):
                 display_text += f"\n  {metadata['description']}"
             if metadata.get("tags"):
                 tags_str = ", ".join(metadata["tags"])
-                display_text += f"\n  🏷️ {tags_str}"
+                display_text += f"\n  # {tags_str}"
 
             item = QListWidgetItem(display_text)
             item.setData(Qt.UserRole, key)  # 儲存實際的 key
             self.strategy_list.addItem(item)
+
+        # ✅ 更新結果計數
+        displayed_count = self.strategy_list.count()
+        total_count = len(self.definitions)
+        if displayed_count == total_count:
+            self.result_count_label.setText(f"顯示 {total_count} 個策略")
+        else:
+            self.result_count_label.setText(f"顯示 {displayed_count}/{total_count} 個策略")
+
+    def _clear_filters(self) -> None:
+        """清除所有篩選條件"""
+        self.search_box.clear()
+        self.tag_filter.setCurrentIndex(0)  # 選擇「全部」
+        # _filter_strategies 會自動被 textChanged 和 currentIndexChanged 觸發
 
     def _on_strategy_selected(self) -> None:
         items = self.strategy_list.selectedItems()
@@ -1141,7 +1121,7 @@ class StrategyPage(QWidget):
         self.definitions[key] = parse_strategy_definition(data)
         self.strategy_list.addItem(key)
         self.strategy_list.setCurrentRow(self.strategy_list.count() - 1)
-        emit_toast(f"✅ 策略 '{key}' 已從範本 '{template.name}' 建立", "success")
+        emit_toast(f"策略 '{key}' 已從範本 '{template.name}' 建立", "success")
 
     def _create_blank_strategy(self) -> None:
         """手動建立空白策略"""
@@ -1302,7 +1282,7 @@ class StrategyPage(QWidget):
                 from dataclasses import asdict
                 levels = [asdict(level) for level in template.levels]
                 self.risk_control.load_levels(levels)
-                emit_toast(f"✅ 已套用風控範本: {template.name}", "success")
+                emit_toast(f"已套用風控範本: {template.name}", "success")
                 self._run_validation()
 
     def _connect_validation_triggers(self) -> None:
@@ -1378,7 +1358,7 @@ class StrategyPage(QWidget):
             # 解析序列
             sequence_text = self.sequence_edit.text().strip()
             if not sequence_text:
-                self.recipe_preview_label.setText("請輸入序列以查看配方...")
+                self.recipe_preview_label.setText("輸入序列以預覽配方")
                 return
 
             sequence = [int(x.strip()) for x in sequence_text.split(",") if x.strip()]
@@ -1398,7 +1378,7 @@ class StrategyPage(QWidget):
             # 載入 ChipProfile 並建立 Planner
             if not self.chip_profile:
                 self.recipe_preview_label.setText(
-                    "⚠️ 未載入籌碼組合\n"
+                    "未載入籌碼組合\n"
                     "請先在「籌碼設定」頁面設定並校準籌碼"
                 )
                 return
@@ -1406,7 +1386,7 @@ class StrategyPage(QWidget):
             calibrated_chips = self.chip_profile.get_calibrated_chips()
             if not calibrated_chips:
                 self.recipe_preview_label.setText(
-                    "⚠️ 沒有已校準的籌碼\n"
+                    "沒有已校準的籌碼\n"
                     "請先在「籌碼設定」頁面校準至少一顆籌碼"
                 )
                 return
@@ -1432,10 +1412,10 @@ class StrategyPage(QWidget):
 
                     if plan.warnings:
                         for warning in plan.warnings:
-                            preview_lines.append(f"  ⚠️  {warning}")
+                            preview_lines.append(f"  !  {warning}")
                 else:
                     preview_lines.append(f"第 {i} 層 ({amount} 元)")
-                    preview_lines.append(f"  ❌ {plan.reason}")
+                    preview_lines.append(f"  × {plan.reason}")
 
                 preview_lines.append("")  # 空行分隔
 
@@ -1446,9 +1426,9 @@ class StrategyPage(QWidget):
             self.recipe_preview_label.setText("\n".join(preview_lines))
 
         except ValueError:
-            self.recipe_preview_label.setText("❌ 序列格式錯誤\n請輸入逗號分隔的數字")
+            self.recipe_preview_label.setText("錯誤: 序列格式不正確\n請輸入逗號分隔的數字")
         except Exception as e:
-            self.recipe_preview_label.setText(f"❌ 配方預覽錯誤:\n{str(e)}")
+            self.recipe_preview_label.setText(f"錯誤: 配方預覽失敗\n{str(e)}")
 
     def _update_recipe_preview_from_widget(self, sequence: list):
         """從 StakingDirectionWidget 更新配方預覽"""
@@ -1462,7 +1442,7 @@ class StrategyPage(QWidget):
             # 載入 ChipProfile 並建立 Planner
             if not self.chip_profile:
                 self.recipe_preview_label.setText(
-                    "⚠️ 未載入籌碼組合\n"
+                    "未載入籌碼組合\n"
                     "請先在「籌碼設定」頁面設定並校準籌碼"
                 )
                 return
@@ -1470,7 +1450,7 @@ class StrategyPage(QWidget):
             calibrated_chips = self.chip_profile.get_calibrated_chips()
             if not calibrated_chips:
                 self.recipe_preview_label.setText(
-                    "⚠️ 沒有已校準的籌碼\n"
+                    "沒有已校準的籌碼\n"
                     "請先在「籌碼設定」頁面校準至少一顆籌碼"
                 )
                 return
@@ -1490,10 +1470,10 @@ class StrategyPage(QWidget):
 
                     if plan.warnings:
                         for warning in plan.warnings:
-                            preview_lines.append(f"  ⚠️  {warning}")
+                            preview_lines.append(f"  !  {warning}")
                 else:
                     preview_lines.append(f"第 {i} 層 ({amount} 元)")
-                    preview_lines.append(f"  ❌ {plan.reason}")
+                    preview_lines.append(f"  × {plan.reason}")
 
                 preview_lines.append("")  # 空行分隔
 
@@ -1504,4 +1484,4 @@ class StrategyPage(QWidget):
             self.recipe_preview_label.setText("\n".join(preview_lines))
 
         except Exception as e:
-            self.recipe_preview_label.setText(f"❌ 配方預覽錯誤:\n{str(e)}")
+            self.recipe_preview_label.setText(f"錯誤: 配方預覽失敗\n{str(e)}")

@@ -1,6 +1,6 @@
-# tests/test_orchestrator_v2.py
+# tests/test_orchestrator.py
 """
-LineOrchestratorV2 集成測試
+LineOrchestrator 集成測試
 
 測試覆蓋：
 1. 策略註冊和綁定
@@ -12,7 +12,7 @@ LineOrchestratorV2 集成測試
 """
 import time
 import pytest
-from src.autobet.lines.orchestrator_v2 import LineOrchestratorV2, TablePhase, BetDirection
+from src.autobet.lines.orchestrator import LineOrchestrator, TablePhase, BetDirection
 from src.autobet.lines.config import (
     StrategyDefinition,
     EntryConfig,
@@ -23,8 +23,8 @@ from src.autobet.lines.config import (
 
 @pytest.fixture
 def orchestrator():
-    """創建 LineOrchestratorV2"""
-    return LineOrchestratorV2()
+    """創建 LineOrchestrator"""
+    return LineOrchestrator()
 
 
 @pytest.fixture

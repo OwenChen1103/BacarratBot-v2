@@ -438,6 +438,7 @@ class LineOrchestrator:
         table_id: str,
         round_id: str,
         strategy_keys: List[str],
+        decisions: Optional[List[BetDecision]] = None,
     ) -> None:
         """
         標記策略為等待結果狀態
@@ -448,16 +449,28 @@ class LineOrchestrator:
         Args:
             table_id: 桌號
             round_id: 局號
-            strategy_keys: 需要標記的策略列表
+            strategy_keys: 需要標記的策略列表（向下兼容）
+            decisions: 完整的決策列表（可選，用於獲取 layer_index）
         """
         if not self.entry_evaluator:
             return
+
+        # 創建 strategy_key -> layer_index 映射
+        layer_map = {}
+        if decisions:
+            for decision in decisions:
+                layer_map[decision.strategy_key] = decision.layer_index
 
         for strategy_key in strategy_keys:
             line_state = self.entry_evaluator.get_line_state(table_id, strategy_key)
             if line_state:
                 line_state.mark_waiting()
                 line_state.last_round_id = round_id
+
+                # ✅ 如果有 layer_index 資訊，同步更新
+                if strategy_key in layer_map:
+                    line_state.current_layer_index = layer_map[strategy_key]
+
                 self._record_event(
                     "DEBUG",
                     f"📝 策略標記為等待結果: {strategy_key} | table={table_id} | round={round_id}",
@@ -578,6 +591,9 @@ class LineOrchestrator:
                             metadata={"from_layer": old_index} if event_type == EventType.LINE_PROGRESSED else {},
                         ))
 
+                # ✅ 同步 line_state 的當前層數索引
+                line_state.current_layer_index = progression.index
+
                 # 重置為 IDLE
                 line_state.phase = LinePhase.IDLE
 
@@ -683,19 +699,22 @@ class LineOrchestrator:
                             direction = "tie"
 
                     # 獲取當前層級和賭注信息
-                    current_layer = state.armed_count
+                    # ✅ 從 LineState 獲取真實的當前層數索引（持久化，不受 pending position 影響）
+                    progression_index = state.current_layer_index
+                    current_layer = progression_index + 1  # UI 顯示從1開始
+
                     max_layer = 3  # 預設最大層級
-                    stake = 0.0  # TODO: 從 PositionManager 獲取實際賭注
-                    next_stake = 0.0  # 下一層金額
+                    stake = 0.0
+                    next_stake = 0.0  # 下一手預計金額
 
                     if strategy_def and strategy_def.staking:
                         max_layer = len(strategy_def.staking.sequence)
-                        if current_layer > 0 and current_layer <= len(strategy_def.staking.sequence):
-                            stake = float(strategy_def.staking.sequence[current_layer - 1])
 
-                        # 計算下一層金額
-                        if current_layer < max_layer:
-                            next_stake = float(strategy_def.staking.sequence[current_layer])
+                        # 當前層的金額（下一手即將下注的金額）
+                        if progression_index < len(strategy_def.staking.sequence):
+                            stake = float(strategy_def.staking.sequence[progression_index])
+                            # ✅ 「預計下手」就是當前層的金額（下一手要下的那一手）
+                            next_stake = stake
 
                     lines.append({
                         "table": table_id,

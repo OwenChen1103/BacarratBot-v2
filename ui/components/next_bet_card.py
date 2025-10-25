@@ -135,7 +135,7 @@ class NextBetCard(QFrame):
             }
         """)
 
-        # 方向映射
+        # ✅ 方向映射 - 支持所有格式
         direction_map = {
             "banker": ("莊", "#ef4444"),
             "player": ("閒", "#3b82f6"),
@@ -143,20 +143,30 @@ class NextBetCard(QFrame):
             "B": ("莊", "#ef4444"),
             "P": ("閒", "#3b82f6"),
             "T": ("和", "#10b981"),
+            "b": ("莊", "#ef4444"),
+            "p": ("閒", "#3b82f6"),
+            "t": ("和", "#10b981"),
         }
+        direction_raw = data.get("direction", "")
         direction_text, direction_color = direction_map.get(
-            data.get("direction", "").lower(), ("?", "#6b7280")
+            direction_raw, ("?", "#6b7280")
         )
 
         # 基本資訊
         amount = data.get("amount", 0)
         current_layer = data.get("current_layer", 0)
         total_layers = data.get("total_layers", 0)
+        is_reverse = data.get("is_reverse", False)
+
+        # 反向標記
+        reverse_indicator = ""
+        if is_reverse:
+            reverse_indicator = " <span style='color: #f59e0b; font-size: 9pt; font-weight: bold;'>(反向)</span>"
 
         # 顯示下注資訊（大號金額）
         info_html = (
             f"<span style='color: #9ca3af;'>方向</span>  "
-            f"<span style='color: {direction_color}; font-weight: bold; font-size: 11pt;'>{direction_text}</span><br>"
+            f"<span style='color: {direction_color}; font-weight: bold; font-size: 11pt;'>{direction_text}</span>{reverse_indicator}<br>"
             f"<span style='color: #9ca3af;'>金額</span>  "
             f"<span style='color: #fbbf24; font-weight: bold; font-size: 12pt;'>{amount}</span> "
             f"<span style='color: #9ca3af;'>元</span><br>"

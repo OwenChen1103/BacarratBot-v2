@@ -69,47 +69,8 @@ class StakingDirectionWidget(QGroupBox):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        # 投注方向選擇
-        direction_label = QLabel("投注方向:")
-        direction_label.setStyleSheet("font-weight: bold; color: #f3f4f6; font-size: 10pt;")
-        layout.addWidget(direction_label)
-
-        self.radio_follow = QRadioButton("跟隨 Pattern (條件說押閒就押閒)")
-        self.radio_follow.setChecked(True)
-        self.radio_follow.setStyleSheet("""
-            QRadioButton {
-                color: #f3f4f6;
-                font-size: 10pt;
-                padding: 6px;
-            }
-            QRadioButton::indicator {
-                width: 16px;
-                height: 16px;
-            }
-        """)
-        self.radio_follow.toggled.connect(self._on_direction_changed)
-
-        self.radio_reverse = QRadioButton("反向押注 (條件說押閒就押莊)")
-        self.radio_reverse.setStyleSheet("""
-            QRadioButton {
-                color: #f3f4f6;
-                font-size: 10pt;
-                padding: 6px;
-            }
-            QRadioButton::indicator {
-                width: 16px;
-                height: 16px;
-            }
-        """)
-        self.radio_reverse.toggled.connect(self._on_direction_changed)
-
-        layout.addWidget(self.radio_follow)
-        layout.addWidget(self.radio_reverse)
-
-        layout.addSpacing(10)
-
-        # 注碼層級設定
-        layers_label = QLabel("注碼序列 (金額):")
+        # 注碼層級設定（移除全局方向選擇）
+        layers_label = QLabel("注碼序列 (每層可獨立設定方向):")
         layers_label.setStyleSheet("font-weight: bold; color: #f3f4f6; font-size: 10pt;")
         layout.addWidget(layers_label)
 
@@ -164,8 +125,13 @@ class StakingDirectionWidget(QGroupBox):
         self.add_layer(200)
         self.add_layer(400)
 
-    def add_layer(self, amount: int):
-        """新增一層"""
+    def add_layer(self, amount: int, is_reverse: bool = False):
+        """新增一層
+
+        Args:
+            amount: 金額（絕對值）
+            is_reverse: 是否反向（True表示負數）
+        """
         layer_widget = QWidget()
         layer_layout = QHBoxLayout(layer_widget)
         layer_layout.setContentsMargins(0, 0, 0, 0)
@@ -180,7 +146,7 @@ class StakingDirectionWidget(QGroupBox):
         # 金額輸入
         spin = QSpinBox()
         spin.setRange(0, 999999)
-        spin.setValue(amount)
+        spin.setValue(abs(amount))
         spin.setSuffix(" 元")
         spin.setFocusPolicy(Qt.StrongFocus)
         spin.installEventFilter(self.wheel_filter)
@@ -194,6 +160,29 @@ class StakingDirectionWidget(QGroupBox):
             }
         """)
         spin.valueChanged.connect(self.update_preview)
+
+        # 方向選擇：跟隨/反向
+        radio_follow = QRadioButton("跟隨")
+        radio_reverse = QRadioButton("反向")
+        radio_follow.setChecked(not is_reverse)
+        radio_reverse.setChecked(is_reverse)
+
+        radio_style = """
+            QRadioButton {
+                color: #d1d5db;
+                font-size: 9pt;
+                padding: 2px;
+            }
+            QRadioButton::indicator {
+                width: 14px;
+                height: 14px;
+            }
+        """
+        radio_follow.setStyleSheet(radio_style)
+        radio_reverse.setStyleSheet(radio_style)
+
+        radio_follow.toggled.connect(self.update_preview)
+        radio_reverse.toggled.connect(self.update_preview)
 
         # 刪除按鈕
         btn_delete = QPushButton("✕")
@@ -215,13 +204,17 @@ class StakingDirectionWidget(QGroupBox):
 
         layer_layout.addWidget(label)
         layer_layout.addWidget(spin, 1)
+        layer_layout.addWidget(radio_follow)
+        layer_layout.addWidget(radio_reverse)
         layer_layout.addWidget(btn_delete)
 
         self.layers_layout.addWidget(layer_widget)
 
         self.layers.append({
             'widget': layer_widget,
-            'spin': spin
+            'spin': spin,
+            'radio_follow': radio_follow,
+            'radio_reverse': radio_reverse
         })
 
         self.update_preview()
@@ -245,22 +238,20 @@ class StakingDirectionWidget(QGroupBox):
 
         self.update_preview()
 
-    def _on_direction_changed(self):
-        """當方向改變時更新預覽"""
-        self.update_preview()
-
     def update_preview(self):
         """更新預覽"""
-        is_reverse = self.radio_reverse.isChecked()
-        direction_text = "反向" if is_reverse else "跟隨"
-
-        preview_lines = [f"<b>投注方向:</b> {direction_text}<br>"]
+        preview_lines = ["<b>注碼序列預覽:</b><br>"]
 
         for i, layer in enumerate(self.layers):
             amount = layer['spin'].value()
-            # 假設 pattern 是 "bet P" (押閒)
+            is_reverse = layer['radio_reverse'].isChecked()
+            direction_text = "反向" if is_reverse else "跟隨"
+            # 假設 pattern 是 "bet P" (押閒)，跟隨押閒，反向押莊
             target = "莊家" if is_reverse else "閒家"
-            preview_lines.append(f"  第 {i+1} 層: <b>{amount}</b> 元 (<span style='color: #60a5fa;'>{target}</span>)")
+            preview_lines.append(
+                f"  第 {i+1} 層: <b>{amount}</b> 元 "
+                f"(<span style='color: {'#f59e0b' if is_reverse else '#60a5fa'};'>{direction_text} → {target}</span>)"
+            )
 
         self.preview_text.setText("<br>".join(preview_lines))
 
@@ -270,11 +261,11 @@ class StakingDirectionWidget(QGroupBox):
 
     def get_sequence(self) -> list:
         """取得注碼序列 (含正負號)"""
-        is_reverse = self.radio_reverse.isChecked()
         sequence = []
 
         for layer in self.layers:
             amount = layer['spin'].value()
+            is_reverse = layer['radio_reverse'].isChecked()
             if is_reverse:
                 sequence.append(-amount)  # 反向用負數
             else:
@@ -292,17 +283,11 @@ class StakingDirectionWidget(QGroupBox):
             layer['widget'].deleteLater()
         self.layers.clear()
 
-        # 判斷方向
-        if sequence and sequence[0] < 0:
-            self.radio_reverse.setChecked(True)
-            sequence = [-x for x in sequence]  # 轉為正數顯示
-        else:
-            self.radio_follow.setChecked(True)
-            sequence = [abs(x) for x in sequence]
-
-        # 建立層級
-        for amount in sequence:
-            self.add_layer(amount)
+        # 建立層級（根據正負號設定每層方向）
+        for value in sequence:
+            is_reverse = (value < 0)
+            amount = abs(value)
+            self.add_layer(amount, is_reverse)
 
     def get_sequence_text(self) -> str:
         """取得序列文字 (用於舊版相容)"""

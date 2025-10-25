@@ -879,7 +879,8 @@ class EngineWorker(QThread):
                     self._line_orchestrator.mark_strategies_waiting(
                         table_id=table_id,
                         round_id=round_id,
-                        strategy_keys=strategy_keys_to_mark
+                        strategy_keys=strategy_keys_to_mark,
+                        decisions=decisions  # ✅ 傳遞完整決策列表，用於更新 layer_index
                     )
                     self._emit_log("INFO", "Engine",
                                   f"📝 已標記 {len(strategy_keys_to_mark)} 個策略為等待結果狀態")
@@ -1530,16 +1531,30 @@ class EngineWorker(QThread):
                         if self._line_orchestrator:
                             definition = self._line_orchestrator.strategies.get(decision.strategy_key)
                             if definition:
+                                # 檢查當前層是否為反向（序列值為負數）
+                                sequence = definition.staking.sequence
+                                current_stake = sequence[decision.layer_index] if decision.layer_index < len(sequence) else 0
+                                is_reverse_layer = (current_stake < 0)
+
+                                # 生成籌碼字串（簡化版）
+                                chips_str = f"{decision.amount}元"
+
+                                # 將方向轉換為完整格式 (b/p/t → banker/player/tie)
+                                direction_map = {"B": "banker", "P": "player", "T": "tie"}
+                                direction_full = direction_map.get(decision.direction.value, decision.direction.value.lower())
+
                                 self.bet_executed.emit({
                                     "strategy": decision.strategy_key,
-                                    "direction": decision.direction.value.lower(),
+                                    "direction": direction_full,
                                     "amount": decision.amount,
                                     "current_layer": decision.layer_index + 1,  # UI 顯示從1開始
                                     "total_layers": len(definition.staking.sequence),
                                     "round_id": decision.round_id,
                                     "sequence": list(definition.staking.sequence),
                                     "on_win": "RESET" if definition.staking.reset_on_win else "ADVANCE",
-                                    "on_loss": "ADVANCE" if definition.staking.advance_on.value == "loss" else "RESET"
+                                    "on_loss": "ADVANCE" if definition.staking.advance_on.value == "loss" else "RESET",
+                                    "is_reverse": is_reverse_layer,  # 新增：當前層是否為反向
+                                    "chips_str": chips_str  # ✅ 新增：籌碼字串
                                 })
                                 self._emit_log("DEBUG", "Line", f"📍 bet_executed 信號已發送")
 

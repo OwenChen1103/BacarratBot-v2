@@ -9,7 +9,7 @@
   "staking": {
     "sequence": [
       100,
-      500,
+      -500,
       1000
     ],
     "advance_on": "loss",

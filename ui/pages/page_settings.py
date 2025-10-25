@@ -40,7 +40,7 @@ class PresetManager(QFrame):
         layout.addWidget(title)
 
         # 說明
-        desc = QLabel("保存或載入完整的系統配置 (positions + overlay + strategy)")
+        desc = QLabel("保存或載入完整的系統配置 (位置校準 + 籌碼組合 + 策略)")
         desc.setStyleSheet("color: #9ca3af; padding: 8px;")
         desc.setAlignment(Qt.AlignCenter)
         layout.addWidget(desc)
@@ -106,17 +106,31 @@ class PresetManager(QFrame):
         """更新當前配置狀態"""
         status_lines = []
 
-        # 檢查 positions.json
+        # 檢查 positions.json (ROI 偵測區域)
         if os.path.exists("configs/positions.json"):
             try:
                 with open("configs/positions.json", "r", encoding="utf-8") as f:
                     pos_data = json.load(f)
-                point_count = len(pos_data.get("points", {}))
-                status_lines.append(f"√ Positions: {point_count} points")
+                roi_count = len(pos_data.get("roi", {}))
+                status_lines.append(f"√ Positions (ROI): {roi_count} 個偵測區域")
             except:
                 status_lines.append("× Positions: 無法讀取")
         else:
             status_lines.append("× Positions: 未找到")
+
+        # 檢查 ChipProfile (籌碼組合)
+        chip_profile_path = "configs/chip_profiles/default.json"
+        if os.path.exists(chip_profile_path):
+            try:
+                with open(chip_profile_path, "r", encoding="utf-8") as f:
+                    profile_data = json.load(f)
+                calibrated_chips = sum(1 for c in profile_data.get("chips", []) if c.get("calibrated"))
+                calibrated_positions = sum(1 for p in profile_data.get("bet_positions", {}).values() if p.get("calibrated"))
+                status_lines.append(f"√ ChipProfile: {calibrated_chips} 籌碼 + {calibrated_positions} 位置")
+            except:
+                status_lines.append("× ChipProfile: 無法讀取")
+        else:
+            status_lines.append("× ChipProfile: 未找到")
 
         # 檢查線路策略 (新系統)
         strategy_dir = "configs/line_strategies"
@@ -161,6 +175,13 @@ class PresetManager(QFrame):
                 files_to_include = [
                     "configs/positions.json"
                 ]
+
+                # 包含所有 ChipProfile
+                chip_profile_dir = "configs/chip_profiles"
+                if os.path.exists(chip_profile_dir):
+                    for f in os.listdir(chip_profile_dir):
+                        if f.endswith('.json'):
+                            files_to_include.append(os.path.join(chip_profile_dir, f))
 
                 # 包含所有線路策略
                 strategy_dir = "configs/line_strategies"
@@ -220,6 +241,8 @@ class PresetManager(QFrame):
 
                 # 確保目錄存在
                 os.makedirs("configs", exist_ok=True)
+                os.makedirs("configs/chip_profiles", exist_ok=True)
+                os.makedirs("configs/line_strategies", exist_ok=True)
                 os.makedirs("templates", exist_ok=True)
 
                 loaded_files = []
@@ -229,15 +252,28 @@ class PresetManager(QFrame):
                     zf.extract("positions.json", "configs/")
                     loaded_files.append("positions.json")
 
-                # 解壓線路策略
-                os.makedirs("configs/line_strategies", exist_ok=True)
+                # 解壓 ChipProfile
                 for file_info in zf.infolist():
-                    if file_info.filename.startswith("line_strategies/") and file_info.filename.endswith('.json'):
-                        target_path = os.path.join("configs", file_info.filename)
-                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                        with zf.open(file_info) as source, open(target_path, 'wb') as target:
-                            target.write(source.read())
-                        loaded_files.append(file_info.filename)
+                    filename = file_info.filename
+                    # 處理 chip_profiles 目錄中的文件
+                    if filename.endswith('.json') and '/' not in filename and filename not in ['positions.json', 'manifest.json']:
+                        # 這可能是 ChipProfile 文件（從舊方案可能在根目錄）
+                        if 'chip' in filename.lower() or 'profile' in filename.lower() or filename == 'default.json':
+                            target_path = os.path.join("configs/chip_profiles", filename)
+                            with zf.open(file_info) as source, open(target_path, 'wb') as target:
+                                target.write(source.read())
+                            loaded_files.append(f"chip_profiles/{filename}")
+
+                # 解壓線路策略
+                for file_info in zf.infolist():
+                    filename = file_info.filename
+                    if filename.endswith('.json') and '/' not in filename and filename not in ['positions.json', 'manifest.json']:
+                        # 檢查是否是策略文件（包含特定關鍵字）
+                        if any(keyword in filename.lower() for keyword in ['strategy', 'line_', '策略', '線路']):
+                            target_path = os.path.join("configs/line_strategies", filename)
+                            with zf.open(file_info) as source, open(target_path, 'wb') as target:
+                                target.write(source.read())
+                            loaded_files.append(f"line_strategies/{filename}")
 
                 # 解壓模板文件
                 for file_info in zf.infolist():
@@ -533,16 +569,16 @@ class ClickDelaySettings(QGroupBox):
 
     def reset_defaults(self):
         """重置為預設值"""
-        self.move_min_spin.setValue(300)
-        self.move_max_spin.setValue(600)
+        self.move_min_spin.setValue(500)
+        self.move_max_spin.setValue(700)
         self.click_min_spin.setValue(200)
-        self.click_max_spin.setValue(400)
+        self.click_max_spin.setValue(350)
         self.chip_min_spin.setValue(400)
-        self.chip_max_spin.setValue(700)
+        self.chip_max_spin.setValue(600)
         self.bet_min_spin.setValue(500)
         self.bet_max_spin.setValue(800)
-        self.confirm_min_spin.setValue(300)
-        self.confirm_max_spin.setValue(500)
+        self.confirm_min_spin.setValue(400)
+        self.confirm_max_spin.setValue(600)
 
 class SettingsPage(QWidget):
     """系統設定頁面"""

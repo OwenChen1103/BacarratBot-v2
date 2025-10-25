@@ -215,15 +215,24 @@ class CompactStrategyInfoCard(QFrame):
         # === 下注序列 ===
         sequence = staking.get('sequence', [])
         if len(sequence) > 0:
-            # 金額用大號字體，醒目顯示
+            # 金額用大號字體，醒目顯示，負數用橙色標記反向
             seq_parts = []
             for i, amount in enumerate(sequence):
-                if i == 0:
+                is_reverse = (amount < 0)
+                abs_amount = abs(amount)
+
+                if is_reverse:
+                    # 反向層：橙色 + 反向標記
+                    seq_parts.append(
+                        f"<span style='color: #f59e0b; font-weight: bold; font-size: 11pt;'>{abs_amount}</span>"
+                        f"<span style='color: #f59e0b; font-size: 8pt;'>⮌</span>"
+                    )
+                elif i == 0:
                     # 第一層用白色
-                    seq_parts.append(f"<span style='color: #e5e7eb; font-weight: bold; font-size: 11pt;'>{amount}</span>")
+                    seq_parts.append(f"<span style='color: #e5e7eb; font-weight: bold; font-size: 11pt;'>{abs_amount}</span>")
                 else:
                     # 後續層用黃色
-                    seq_parts.append(f"<span style='color: #fbbf24; font-weight: bold; font-size: 11pt;'>{amount}</span>")
+                    seq_parts.append(f"<span style='color: #fbbf24; font-weight: bold; font-size: 11pt;'>{abs_amount}</span>")
 
             seq_display = ' → '.join(seq_parts)
             advance_on = staking.get('advance_on', 'loss')

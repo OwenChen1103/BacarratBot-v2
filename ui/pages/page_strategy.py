@@ -56,7 +56,6 @@ from ..design_system import FontStyle, Colors, Spacing, StyleSheet  # ✅ 導入
 from ..widgets.pattern_input_widget import PatternInputWidget
 from ..widgets.visual_pattern_builder import VisualPatternBuilder
 from ..widgets.first_trigger_widget import FirstTriggerWidget
-from ..widgets.dedup_mode_widget import DedupModeWidget
 from ..widgets.staking_direction_widget import StakingDirectionWidget
 from ..widgets.validation_panel_widget import ValidationPanelWidget
 from ..widgets.cross_table_mode_widget import CrossTableModeWidget
@@ -78,12 +77,6 @@ class WheelEventFilter(QObject):
                 return True  # 事件已處理，不再傳遞
         return super().eventFilter(obj, event)
 
-
-DEDUP_LABELS = {
-    DedupMode.NONE: "不去重",
-    DedupMode.OVERLAP: "重疊去重",
-    DedupMode.STRICT: "嚴格去重",
-}
 
 ADVANCE_LABELS = {
     AdvanceRule.LOSS: "輸進下一層",
@@ -651,10 +644,6 @@ class StrategyPage(QWidget):
         form.addRow("有效視窗:", self.entry_window)
         layout.addLayout(form)
 
-        # 使用新的 Dedup Mode Widget 取代 ComboBox
-        self.entry_dedup_widget = DedupModeWidget()
-        layout.addWidget(self.entry_dedup_widget)
-
         # 使用新的 First Trigger Widget 取代 SpinBox
         self.entry_first_trigger_widget = FirstTriggerWidget()
         layout.addWidget(self.entry_first_trigger_widget)
@@ -1007,7 +996,7 @@ class StrategyPage(QWidget):
         entry = data.get("entry", {})
         self.entry_pattern_widget.set_pattern(entry.get("pattern", ""))
         self.entry_window.setValue(float(entry.get("valid_window_sec", 0) or 0))
-        self.entry_dedup_widget.set_value(entry.get("dedup", "overlap_dedup"))
+        # dedup 設定已從 UI 移除，保留配置檔的值（預設 overlap_dedup）
         self.entry_first_trigger_widget.set_value(int(entry.get("first_trigger_layer", 1) or 1))
 
         staking = data.get("staking", {})
@@ -1043,12 +1032,17 @@ class StrategyPage(QWidget):
         per_hand_cap_value = None if per_hand_cap == 0.0 else per_hand_cap
         max_layers_value = None if self.max_layers.value() == 0 else self.max_layers.value()
 
+        # 保留現有配置的 dedup 值，如果是新策略則使用 overlap_dedup
+        existing_dedup = "overlap_dedup"
+        if self.current_data:
+            existing_dedup = self.current_data.get("entry", {}).get("dedup", "overlap_dedup")
+
         data = {
             "strategy_key": self.current_key or "",
             "entry": {
                 "pattern": self.entry_pattern_widget.get_pattern(),
                 "valid_window_sec": float(self.entry_window.value()),
-                "dedup": self.entry_dedup_widget.get_value(),
+                "dedup": existing_dedup,  # 保留配置檔的值
                 "first_trigger_layer": self.entry_first_trigger_widget.get_value(),
             },
             "staking": {
@@ -1138,7 +1132,7 @@ class StrategyPage(QWidget):
             "entry": {
                 "pattern": "BB then bet P",
                 "valid_window_sec": 8,
-                "dedup": DedupMode.OVERLAP.value,
+                "dedup": "overlap_dedup",  # 新策略預設使用 overlap_dedup
                 "first_trigger_layer": 1,
             },
             "staking": {
@@ -1223,7 +1217,6 @@ class StrategyPage(QWidget):
         self.current_data = {}
         self.entry_pattern_widget.set_pattern("")
         self.entry_window.setValue(0.0)
-        self.entry_dedup_widget.set_value("overlap_dedup")
         self.entry_first_trigger_widget.set_value(1)
         self.staking_direction_widget.set_sequence([100, 200, 400])
         self.advance_combo.setCurrentIndex(0)
@@ -1290,7 +1283,6 @@ class StrategyPage(QWidget):
         # Entry 相關
         self.entry_pattern_widget.pattern_changed.connect(self._run_validation)
         self.entry_window.valueChanged.connect(self._run_validation)
-        self.entry_dedup_widget.value_changed.connect(self._run_validation)
         self.entry_first_trigger_widget.value_changed.connect(self._run_validation)
 
         # Staking 相關

@@ -134,7 +134,7 @@ class ResultRoundCard(QFrame):
         """
         self.pending_data = data
 
-        # 方向映射
+        # ✅ 方向映射 - 支持所有格式
         direction_map = {
             "banker": ("🔴 莊家", "#ef4444"),
             "player": ("🔵 閒家", "#3b82f6"),
@@ -142,9 +142,13 @@ class ResultRoundCard(QFrame):
             "B": ("🔴 莊家", "#ef4444"),
             "P": ("🔵 閒家", "#3b82f6"),
             "T": ("🟢 和局", "#10b981"),
+            "b": ("🔴 莊家", "#ef4444"),
+            "p": ("🔵 閒家", "#3b82f6"),
+            "t": ("🟢 和局", "#10b981"),
         }
+        direction_raw = data.get("direction", "")
         direction_text, direction_color = direction_map.get(
-            data.get("direction", "").lower(), ("未知", "#ffffff")
+            direction_raw, ("未知", "#ffffff")
         )
 
         # 基本資訊
@@ -153,10 +157,16 @@ class ResultRoundCard(QFrame):
         current_layer = data.get("current_layer", 0)
         total_layers = data.get("total_layers", 0)
         round_id = data.get("round_id", "N/A")
+        is_reverse = data.get("is_reverse", False)
+
+        # 反向標記
+        reverse_tag = ""
+        if is_reverse:
+            reverse_tag = " <span style='color:#f59e0b;font-weight:bold;'>(反向)</span>"
 
         info_text = (
             f"<b>策略:</b> {strategy}<br>"
-            f"<b>方向:</b> <span style='color:{direction_color};font-weight:bold;'>{direction_text}</span><br>"
+            f"<b>方向:</b> <span style='color:{direction_color};font-weight:bold;'>{direction_text}</span>{reverse_tag}<br>"
             f"<b>金額:</b> {amount} 元<br>"
             f"<b>層數:</b> 第 {current_layer}/{total_layers} 層<br>"
             f"<b>局號:</b> <span style='color:#9ca3af;font-size:8px;'>{round_id}</span>"

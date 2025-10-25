@@ -1186,7 +1186,7 @@ class DashboardPage(QWidget):
 
     # 精簡監控視窗信號
     compact_status_updated = Signal(str, str, str)  # (mode, mode_text, detection_text)
-    compact_strategy_updated = Signal(str, str, str, str, int, int, float)  # (strategy_name, table, round_id, status, current_layer, max_layer, next_stake)
+    compact_strategy_updated = Signal(str, str, str, str, int, int, float, str)  # (strategy_name, table, round_id, status, current_layer, max_layer, next_stake, direction)
     compact_pnl_updated = Signal(float, int, int, int)  # (pnl, wins, losses, total)
     compact_bet_status_updated = Signal(str, dict)  # (status, data)
     compact_history_updated = Signal(list)  # (history) - list of {"winner": "banker/player/tie"}
@@ -1937,7 +1937,10 @@ class DashboardPage(QWidget):
                 if self.latest_results and "main" in self.latest_results:
                     info = self.latest_results.get("main")
                     if info and info.get("winner"):
-                        result_winner = info.get("winner", "")
+                        winner_raw = info.get("winner", "")
+                        # ✅ 轉換格式 B/P/T → banker/player/tie
+                        winner_map = {"B": "banker", "P": "player", "T": "tie"}
+                        result_winner = winner_map.get(winner_raw, winner_raw.lower())
 
                 compact_data = {
                     "direction": self.compact_current_bet.get("direction", ""),
@@ -2077,8 +2080,9 @@ class DashboardPage(QWidget):
                 current_layer = first_line.get("current_layer", 0)
                 max_layer = first_line.get("max_layer", 0)
                 next_stake = first_line.get("next_stake", 0.0)
+                direction = first_line.get("direction", "")
 
-                self.compact_strategy_updated.emit(strategy_name, table_id, round_id, status_str, current_layer, max_layer, next_stake)
+                self.compact_strategy_updated.emit(strategy_name, table_id, round_id, status_str, current_layer, max_layer, next_stake, direction)
 
                 # ✅ 檢查警告條件
                 self._check_warning_conditions(first_line, summary)

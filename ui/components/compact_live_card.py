@@ -97,12 +97,27 @@ class CompactLiveCard(QFrame):
         separator2.setStyleSheet("background-color: #2d3139; min-height: 1px; max-height: 1px; border: none;")
         layout.addWidget(separator2)
 
-        # === 上手結果（永久顯示）===
+        # === 上手結果 + 預計下手（並排顯示）===
+        result_row = QHBoxLayout()
+        result_row.setContentsMargins(0, 0, 0, 0)
+        result_row.setSpacing(12)
+
         self.result_label = QLabel("<span style='color: #6b7280;'>上手結果: 尚未觸發</span>")
         self.result_label.setFont(QFont("Microsoft YaHei UI", 9))
         self.result_label.setStyleSheet("background: transparent; border: none; padding: 2px 0px;")
         self.result_label.setWordWrap(True)
-        layout.addWidget(self.result_label)
+
+        self.next_bet_label = QLabel("<span style='color: #6b7280;'>預計下手: --</span>")
+        self.next_bet_label.setFont(QFont("Microsoft YaHei UI", 9))
+        self.next_bet_label.setStyleSheet("background: transparent; border: none; padding: 2px 0px;")
+        self.next_bet_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.next_bet_label.setWordWrap(True)
+
+        result_row.addWidget(self.result_label)
+        result_row.addStretch()
+        result_row.addWidget(self.next_bet_label)
+
+        layout.addLayout(result_row)
 
         # 填滿整個卡片
         layout.addStretch()
@@ -215,6 +230,9 @@ class CompactLiveCard(QFrame):
         if not self.last_result:
             self.result_label.setText("<span style='color: #6b7280;'>上手結果: 尚未觸發</span>")
 
+        # 預計下手 - 顯示預設狀態
+        self.next_bet_label.setText("<span style='color: #6b7280;'>預計下手: --</span>")
+
         self._set_normal_style()
 
     def _show_waiting_trigger(self, snapshot: Dict[str, Any], table_id: str) -> None:
@@ -233,6 +251,9 @@ class CompactLiveCard(QFrame):
 
         # 風控狀態
         self._update_risk_display(snapshot, table_id)
+
+        # 預計下手
+        self._update_next_bet_display(snapshot, table_id)
 
         self._set_normal_style()
 
@@ -256,6 +277,9 @@ class CompactLiveCard(QFrame):
         # 風控狀態
         self._update_risk_display(snapshot, table_id)
 
+        # 預計下手 - 在準備下注階段顯示即將下注的資訊
+        self._update_next_bet_display(snapshot, table_id)
+
         self._set_highlight_style('ready')
 
     def _show_waiting_result(self, snapshot: Dict[str, Any], table_id: str) -> None:
@@ -278,6 +302,9 @@ class CompactLiveCard(QFrame):
 
         # 風控狀態
         self._update_risk_display(snapshot, table_id)
+
+        # 預計下手 - 在等待開獎階段也顯示
+        self._update_next_bet_display(snapshot, table_id)
 
         self._set_highlight_style('waiting')
 
@@ -331,6 +358,52 @@ class CompactLiveCard(QFrame):
             )
 
         self.risk_label.setText(risk_html)
+
+    def _update_next_bet_display(self, snapshot: Dict[str, Any], table_id: str = "main") -> None:
+        """更新預計下手顯示"""
+        lines = snapshot.get("lines", [])
+        table_lines = [line for line in lines if line.get("table") == table_id]
+
+        if not table_lines:
+            self.next_bet_label.setText("<span style='color: #6b7280;'>預計下手: --</span>")
+            return
+
+        line = table_lines[0]
+        next_stake = abs(line.get("next_stake", 0.0))
+        direction = line.get("direction", "")
+
+        # 檢查是否為反向層
+        is_reverse = (line.get("next_stake", 0.0) < 0)
+
+        if next_stake <= 0:
+            self.next_bet_label.setText("<span style='color: #6b7280;'>預計下手: --</span>")
+            return
+
+        # 方向映射和顏色
+        direction_map = {
+            "banker": ("B", Colors.ERROR_500),
+            "player": ("P", Colors.INFO_500),
+            "tie": ("T", Colors.SUCCESS_500)
+        }
+        direction_text, direction_color = direction_map.get(direction, ("?", "#6b7280"))
+
+        # 如果是反向層，反轉方向
+        if is_reverse:
+            opposite_map = {"B": ("P", Colors.INFO_500), "P": ("B", Colors.ERROR_500), "T": ("T", Colors.SUCCESS_500)}
+            direction_text, direction_color = opposite_map.get(direction_text, (direction_text, direction_color))
+
+        # 反向標記
+        reverse_indicator = ""
+        if is_reverse:
+            reverse_indicator = "<span style='color: #f59e0b; font-size: 8pt;'>⮌</span>"
+
+        next_bet_html = (
+            f"<span style='color: #6b7280;'>預計下手: </span>"
+            f"<span style='color: {direction_color}; font-weight: bold;'>{direction_text}</span> "
+            f"<span style='color: #d1d5db; font-weight: bold;'>{next_stake:.0f}元</span>{reverse_indicator}"
+        )
+
+        self.next_bet_label.setText(next_bet_html)
 
     def _update_layer_info(self, current: int, total: int, risk_info: str = "") -> None:
         """更新層級資訊（簡化顯示）- 已不使用"""

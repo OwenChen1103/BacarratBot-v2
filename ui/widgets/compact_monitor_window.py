@@ -106,7 +106,7 @@ class CompactMonitorWindow(QWidget):
 
         # 初始化顯示
         self.update_status("idle", "○ 等待啟動", "")
-        self.update_strategy("", "", "", "", 0, 0, 0.0)
+        self.update_strategy("", "", "", "", 0, 0, 0.0, "")
         self.update_pnl(0, 0, 0, 0)
         self.update_bet_status("waiting", {})
         self.update_history([])
@@ -454,8 +454,19 @@ class CompactMonitorWindow(QWidget):
 
         self.detection_label.setStyleSheet(f"color: {detection_color}; background: transparent; border: none;")
 
-    def update_strategy(self, strategy_name: str, table: str, round_id: str, status: str, current_layer: int = 0, max_layer: int = 0, next_stake: float = 0.0):
-        """更新策略資訊"""
+    def update_strategy(self, strategy_name: str, table: str, round_id: str, status: str, current_layer: int = 0, max_layer: int = 0, next_stake: float = 0.0, direction: str = ""):
+        """更新策略資訊
+
+        Args:
+            strategy_name: 策略名稱
+            table: 桌號
+            round_id: 局號
+            status: 狀態
+            current_layer: 當前層數
+            max_layer: 最大層數
+            next_stake: 下一注金額（負數=反向）
+            direction: 下注方向 (banker/player/tie)
+        """
         self.strategy_name_label.setText(f"策略: {strategy_name or '--'}")
 
         # 顯示層數（如果有）
@@ -466,9 +477,30 @@ class CompactMonitorWindow(QWidget):
             self.strategy_layer_label.setText("")
             self.strategy_layer_label.hide()
 
-        # 顯示下一注金額（如果有）
-        if next_stake > 0:
-            self.next_stake_label.setText(f"下一注: {next_stake:.0f}元")
+        # 顯示預計下手（方向 + 金額）
+        if next_stake != 0:
+            # 檢查是否為反向層
+            is_reverse = (next_stake < 0)
+            amount = abs(next_stake)
+
+            # 方向映射和顏色
+            direction_map = {
+                "banker": ("B", Colors.ERROR_500),
+                "player": ("P", Colors.INFO_500),
+                "tie": ("T", Colors.SUCCESS_500)
+            }
+            direction_text, direction_color = direction_map.get(direction, ("?", Colors.TEXT_MUTED))
+
+            # 如果是反向層，反轉方向
+            if is_reverse:
+                opposite_map = {"B": ("P", Colors.INFO_500), "P": ("B", Colors.ERROR_500), "T": ("T", Colors.SUCCESS_500)}
+                direction_text, direction_color = opposite_map.get(direction_text, (direction_text, direction_color))
+
+            # 反向標記
+            reverse_indicator = "⮌" if is_reverse else ""
+
+            self.next_stake_label.setText(f"預計下手: {direction_text} {amount:.0f}元{reverse_indicator}")
+            self.next_stake_label.setStyleSheet(f"color: {direction_color}; background: transparent; border: none; font-weight: bold;")
             self.next_stake_label.show()
         else:
             self.next_stake_label.setText("")
@@ -541,29 +573,56 @@ class CompactMonitorWindow(QWidget):
 
         elif status == "betting":
             self.bet_title_label.setText("結果局")
-            direction_map = {"banker": "莊家", "player": "閒家", "tie": "和局"}
-            direction = direction_map.get(data.get("direction", ""), "--")
+            # ✅ 支持兩種格式：banker/player/tie 或 B/P/T
+            direction_map = {
+                "banker": "莊家", "player": "閒家", "tie": "和局",
+                "B": "莊家", "P": "閒家", "T": "和局",
+                "b": "莊家", "p": "閒家", "t": "和局"
+            }
+            direction_raw = data.get("direction", "")
+            direction = direction_map.get(direction_raw, "--")
             amount = data.get("amount", 0)
             chips = data.get("chips_str", "--")
 
-            self.bet_line1.setText(f"已下注: {direction} {amount} 元")
-            self.bet_line2.setText(f"籌碼: {chips}")
+            # ✅ 防禦性檢查：確保有有效數據
+            if not direction_raw or amount == 0:
+                self.bet_line1.setText(f"已下注: 數據載入中...")
+                self.bet_line2.setText(f"籌碼: --")
+            else:
+                self.bet_line1.setText(f"已下注: {direction} {amount:.0f} 元")
+                self.bet_line2.setText(f"籌碼: {chips}")
+
             self.bet_line3.setText("等待開獎...")
             self.bet_line4.setText("")
 
         elif status == "settled":
             self.bet_title_label.setText("結果局")
-            direction_map = {"banker": "莊家", "player": "閒家", "tie": "和局"}
-            bet_direction = direction_map.get(data.get("direction", ""), "--")
-            result_direction = direction_map.get(data.get("result", ""), "--")
+            # ✅ 支持兩種格式：banker/player/tie 或 B/P/T
+            direction_map = {
+                "banker": "莊家", "player": "閒家", "tie": "和局",
+                "B": "莊家", "P": "閒家", "T": "和局",
+                "b": "莊家", "p": "閒家", "t": "和局"
+            }
+            bet_direction_raw = data.get("direction", "")
+            result_raw = data.get("result", "")
+            bet_direction = direction_map.get(bet_direction_raw, "--")
+            result_direction = direction_map.get(result_raw, "--")
             amount = data.get("amount", 0)
             pnl = data.get("pnl", 0)
             outcome = data.get("outcome", "")
 
             outcome_text = "勝" if outcome == "win" else "輸" if outcome == "loss" else "skip"
 
-            self.bet_line1.setText(f"已下注: {bet_direction} {amount} 元")
-            self.bet_line2.setText(f"開獎: {result_direction} ({outcome_text})")
+            # ✅ 防禦性檢查：確保有有效數據
+            if not bet_direction_raw or amount == 0:
+                self.bet_line1.setText(f"已下注: -- 元")
+            else:
+                self.bet_line1.setText(f"已下注: {bet_direction} {amount:.0f} 元")
+
+            if not result_raw:
+                self.bet_line2.setText(f"開獎: 數據載入中...")
+            else:
+                self.bet_line2.setText(f"開獎: {result_direction} ({outcome_text})")
 
             sign = "+" if pnl > 0 else ""
             pnl_text = f"盈虧: {sign}{pnl:.0f} 元"

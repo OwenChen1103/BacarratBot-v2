@@ -17,7 +17,8 @@
       "Bash(git commit:*)",
       "Bash(git stash:*)",
       "Bash(del test_new_methods.py)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(timeout /t 5)"
     ],
     "deny": [],
     "ask": []

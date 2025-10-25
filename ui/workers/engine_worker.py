@@ -128,6 +128,7 @@ class EngineWorker(QThread):
     # 🔥 新增: 結果局相關信號
     bet_executed = Signal(dict)        # 下注執行完成後發送
     result_settled = Signal(str, float)  # 結果計算完成後發送 (outcome, pnl)
+    strategy_pre_triggered = Signal(dict)  # ✅ 策略預觸發信號（結果出來立即發送）
 
     def __init__(self):
         super().__init__()
@@ -499,6 +500,20 @@ class EngineWorker(QThread):
                     # 🔥 新增: 發送「結果已計算」信號（使用 settlement_round_id）
                     self._emit_result_settled_signal(table_id, settlement_round_id, winner)
 
+                    # ✅ 新增: 檢查預觸發（結果出來立即檢查，不等可下注畫面）
+                    triggered_strategies = self._check_pre_trigger(table_id, ts_sec)
+                    if triggered_strategies:
+                        # 發送預觸發信號給 UI
+                        self.strategy_pre_triggered.emit({
+                            "table_id": table_id,
+                            "strategies": triggered_strategies,
+                            "timestamp": ts_sec,
+                            "status": "pre_triggered",  # 預觸發狀態
+                            "message": f"檢測到 {len(triggered_strategies)} 個策略觸發，等待下注時機"
+                        })
+                        self._emit_log("INFO", "PreTrigger",
+                                      f"🎯 發送預觸發信號: {len(triggered_strategies)} 個策略")
+
                     # 階段檢測現在由 PhaseDetector 自動處理
                     # PhaseDetector 會在 SETTLING → BETTABLE → LOCKED 的適當時機
                     # 通過 phase_changed 信號觸發 _on_phase_changed()
@@ -542,7 +557,159 @@ class EngineWorker(QThread):
             self._emit_log("ERROR", "Events", f"事件處理錯誤: {e}")
             self._emit_log("ERROR", "Events", f"堆棧追蹤: {traceback.format_exc()}")
 
+    def _check_pre_trigger(self, table_id: str, timestamp: float) -> List[Dict[str, Any]]:
+        """檢查是否有策略被預觸發（僅用於 UI 顯示，不創建倉位）
 
+        此方法在結果出來後立即調用，用於提前通知用戶策略已觸發。
+        實際的決策生成和倉位創建仍在檢測到可下注畫面時進行。
+
+        ⚠️ 重要：完全模仿主要投注邏輯 (_evaluate_strategy) 的所有檢查，
+        包括去重機制、觀察局邏輯、風控檢查等，但不修改任何狀態。
+
+        Args:
+            table_id: 桌號
+            timestamp: 時間戳
+
+        Returns:
+            被預觸發的策略列表，每個策略包含：
+            {
+                "strategy": str,  # 策略名稱
+                "direction": str,  # 下注方向
+                "amount": float,  # 下注金額
+                "layer_index": int,  # 層數索引
+                "is_reverse": bool,  # 是否反向層
+            }
+        """
+        if not self._line_orchestrator or not self._line_orchestrator.entry_evaluator:
+            return []
+
+        try:
+            triggered_strategies = []
+
+            # 獲取該桌號的所有策略
+            strategies_for_table = self._line_orchestrator.registry.get_strategies_for_table(table_id)
+
+            for strategy_key, definition in strategies_for_table:
+                # 獲取 SignalTracker
+                tracker = self._line_orchestrator.signal_trackers.get(strategy_key)
+                if not tracker:
+                    continue
+
+                # 獲取 LineState
+                line_state = self._line_orchestrator.entry_evaluator._ensure_line_state(table_id, strategy_key)
+
+                # ===== 檢查 1: Line 是否在等待結果 =====
+                if line_state.phase.value == "waiting_result":
+                    continue
+
+                # ===== 檢查 2: Line 是否被凍結 =====
+                if line_state.frozen:
+                    continue
+
+                # ===== 檢查 3: 是否有待處理倉位 =====
+                # 防止在結算局顯示預觸發
+                if self._line_orchestrator.position_manager.has_any_position_for_strategy(
+                    table_id, strategy_key
+                ):
+                    continue
+
+                # ===== 檢查 4: 風控封鎖 =====
+                if (self._line_orchestrator.entry_evaluator.risk_coordinator and
+                    self._line_orchestrator.entry_evaluator.risk_coordinator.is_blocked(
+                        strategy_key, table_id, definition.metadata
+                    )):
+                    continue
+
+                # ===== 檢查 5: 模式匹配（只讀，不修改狀態）=====
+                pattern = definition.entry.pattern
+                required_seq = tracker._pattern_sequence(pattern)
+                recent_winners = tracker._get_recent_winners(table_id, len(required_seq))
+
+                # 基本模式匹配檢查
+                if not recent_winners or not tracker._match_pattern(required_seq, recent_winners):
+                    continue
+
+                # ===== 檢查 6: 有效時間窗口 =====
+                if definition.entry.valid_window_sec > 0:
+                    pattern_time = tracker._pattern_start_time(table_id, len(required_seq))
+                    if pattern_time is None or (timestamp - pattern_time) > definition.entry.valid_window_sec:
+                        continue
+
+                # ===== 檢查 7: 去重機制（只讀，不修改 last_trigger_pattern_end_time）=====
+                # ⚠️ 這是關鍵！需要檢查「從上次觸發後，有多少個新結果」
+                from src.autobet.lines.config import DedupMode
+
+                if definition.entry.dedup == DedupMode.OVERLAP:
+                    pattern_len = len(required_seq)
+                    last_pattern_end_time = tracker.last_trigger_pattern_end_time.get(table_id, -1)
+
+                    # 計算「從上次觸發後」有多少個新結果
+                    # 原理：結算後需要「重新累積」足夠的新結果才能再次觸發
+                    history_deque = tracker.history.get(table_id)
+                    if not history_deque:
+                        continue
+
+                    # 統計「時間戳晚於 last_pattern_end_time」的結果數量
+                    new_results_count = sum(
+                        1 for _, ts in history_deque
+                        if ts > last_pattern_end_time
+                    )
+
+                    # 需要至少 pattern_len 個新結果才能形成完整的新模式
+                    # 例如：PP 模式需要 2 個新結果，PPP 需要 3 個
+                    if new_results_count < pattern_len:
+                        # 新結果不足，跳過（這是「結算後重新計數」的關鍵）
+                        continue
+
+                    # ⚠️ 注意：這裡不更新 last_trigger_pattern_end_time
+                    # 因為這只是預觸發檢查，不是真正的觸發
+
+                # ===== 檢查 8: 觀察局邏輯（armed_count 和 first_trigger_layer）=====
+                # ⚠️ 問題：預觸發時 armed_count 還沒增加，所以需要模擬
+                # 如果模式匹配成功，armed_count 會在實際觸發時 +1
+                # 所以這裡要檢查「armed_count + 1」是否滿足條件
+                simulated_armed_count = line_state.armed_count + 1
+                required_triggers = 1 if definition.entry.first_trigger_layer >= 1 else 2
+
+                if simulated_armed_count < required_triggers:
+                    # 觀察局：模式匹配了，但還不會真正下注
+                    continue
+
+                # ===== 通過所有檢查，顯示預觸發 =====
+                # 獲取層數進度和金額
+                progression = self._line_orchestrator.entry_evaluator._get_progression(table_id, strategy_key)
+                desired_stake = progression.current_stake()
+
+                # 計算方向
+                base_direction = self._line_orchestrator.entry_evaluator._derive_base_direction(definition.entry)
+                direction_str, amount = self._line_orchestrator.entry_evaluator._resolve_direction(
+                    desired_stake, base_direction
+                )
+
+                # 檢查是否為反向層
+                is_reverse = (desired_stake < 0)
+
+                triggered_strategies.append({
+                    "strategy": strategy_key,
+                    "direction": direction_str,  # B/P/T
+                    "amount": amount,
+                    "layer_index": progression.index,
+                    "current_layer": progression.index + 1,  # UI 顯示從 1 開始
+                    "total_layers": len(definition.staking.sequence),
+                    "is_reverse": is_reverse,
+                    "pattern": definition.entry.pattern,
+                })
+
+                self._emit_log("INFO", "PreTrigger",
+                              f"🎯 預觸發檢測: {strategy_key} | 方向={direction_str} | 金額={amount} | 層級={progression.index + 1}")
+
+            return triggered_strategies
+
+        except Exception as e:
+            self._emit_log("ERROR", "PreTrigger", f"預觸發檢查錯誤: {e}")
+            import traceback
+            self._emit_log("ERROR", "PreTrigger", traceback.format_exc())
+            return []
 
     def _store_latest_result(self, event: Dict[str, Any]) -> None:
         """儲存最新結果（內部統一使用 canonical ID）"""
@@ -944,6 +1111,24 @@ class EngineWorker(QThread):
                 for definition in definitions.values():
                     self._line_orchestrator.register_strategy(definition)
                 self._emit_log("INFO", "Strategy", f"✅ 載入 {len(definitions)} 條策略")
+
+                # ✅ 提前初始化所有策略狀態（單桌模式）
+                # 原先策略狀態在首次 BETTABLE 階段才創建，現在改為啟動時就創建
+                # 這樣用戶可以立即在 UI 看到所有已載入的策略
+                default_table_id = "main"  # 單桌模式固定使用 "main"
+
+                if self._line_orchestrator.entry_evaluator:
+                    for strategy_key in definitions.keys():
+                        # 提前創建 LineState 和 LayerProgression
+                        self._line_orchestrator.entry_evaluator._ensure_line_state(
+                            default_table_id, strategy_key
+                        )
+                        self._line_orchestrator.entry_evaluator._get_progression(
+                            default_table_id, strategy_key
+                        )
+
+                    self._emit_log("INFO", "Strategy",
+                                  f"✅ 已為 {len(definitions)} 條策略初始化狀態 (table={default_table_id})")
             else:
                 self._emit_log(
                     "WARNING",

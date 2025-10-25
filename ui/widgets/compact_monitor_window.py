@@ -545,6 +545,7 @@ class CompactMonitorWindow(QWidget):
         status:
             - "waiting": 等待進場信號
             - "ready": 準備下注
+            - "pre_triggered": ✅ 策略已觸發，等待下注時機
             - "betting": 結果局進行中
             - "settled": 結果已出
         """
@@ -569,6 +570,26 @@ class CompactMonitorWindow(QWidget):
             self.bet_line1.setText(f"方向: {direction}")
             self.bet_line2.setText(f"金額: {amount} 元")
             self.bet_line3.setText(f"籌碼: {chips}")
+            self.bet_line4.setText("")
+
+        elif status == "pre_triggered":
+            # ✅ 新增：預觸發狀態顯示
+            self.bet_title_label.setText("🎯 策略已觸發")
+            # ✅ 支持兩種格式：banker/player/tie 或 B/P/T
+            direction_map = {
+                "banker": "莊家", "player": "閒家", "tie": "和局",
+                "B": "莊家", "P": "閒家", "T": "和局",
+                "b": "莊家", "p": "閒家", "t": "和局"
+            }
+            direction_raw = data.get("direction", "")
+            direction = direction_map.get(direction_raw, "--")
+            amount = data.get("amount", 0)
+            chips = data.get("chips_str", "--")
+
+            self.bet_line1.setText(f"預計下手: {direction} {amount:.0f} 元")
+            self.bet_line2.setText(f"籌碼: {chips}")
+            self.bet_line3.setText("等待下注時機...")
+            self.bet_line3.setStyleSheet(f"color: {Colors.INFO_500}; background: transparent; border: none;")
             self.bet_line4.setText("")
 
         elif status == "betting":

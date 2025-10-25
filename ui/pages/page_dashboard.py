@@ -1567,6 +1567,7 @@ class DashboardPage(QWidget):
         self.engine_worker.next_bet_info.connect(self.on_next_bet_info)
         self.engine_worker.bet_executed.connect(self.on_bet_executed)       # 下注後顯示結果局
         self.engine_worker.result_settled.connect(self.on_result_settled)   # 開獎後更新結果
+        self.engine_worker.strategy_pre_triggered.connect(self.on_strategy_pre_triggered)  # ✅ 預觸發時立即顯示
 
         # 啟動工作執行緒
         self.engine_worker.start()
@@ -1870,6 +1871,70 @@ class DashboardPage(QWidget):
 
         except Exception as e:
             self.log_viewer.add_log("ERROR", "Dashboard", f"更新下注卡片失敗: {e}")
+
+    def on_strategy_pre_triggered(self, trigger_data: Dict[str, Any]) -> None:
+        """
+        接收策略預觸發信號，立即顯示結果局（結果出來時就顯示）
+
+        Args:
+            trigger_data: {
+                "table_id": str,
+                "strategies": List[Dict],  # 觸發的策略列表
+                "timestamp": float,
+                "status": "pre_triggered",
+                "message": str
+            }
+        """
+        try:
+            strategies = trigger_data.get("strategies", [])
+            if not strategies:
+                return
+
+            # 取第一個觸發的策略（如果有多個，只顯示第一個）
+            first_strategy = strategies[0]
+
+            # 構建預觸發數據（格式與 bet_executed 相容）
+            pre_trigger_bet_data = {
+                "strategy": first_strategy.get("strategy", "N/A"),
+                "direction": first_strategy.get("direction", ""),  # B/P/T
+                "amount": first_strategy.get("amount", 0),
+                "current_layer": first_strategy.get("current_layer", 1),
+                "total_layers": first_strategy.get("total_layers", 1),
+                "is_reverse": first_strategy.get("is_reverse", False),
+                "status": "pre_triggered",  # ✅ 標記為預觸發狀態
+                "chips_str": f"{first_strategy.get('amount', 0):.0f}元"
+            }
+
+            # 轉換方向格式 B/P/T → banker/player/tie (如果需要)
+            direction_map = {"B": "banker", "P": "player", "T": "tie"}
+            direction = pre_trigger_bet_data["direction"]
+            if direction in direction_map:
+                pre_trigger_bet_data["direction"] = direction_map[direction]
+
+            # 顯示預觸發結果局
+            self.next_bet_card.show_result_round(pre_trigger_bet_data)
+            self.log_viewer.add_log(
+                "INFO",
+                "Dashboard",
+                f"🎯 策略預觸發: {first_strategy.get('strategy', 'N/A')} | "
+                f"{first_strategy.get('direction', 'N/A')} | "
+                f"${first_strategy.get('amount', 0):.0f} | "
+                f"等待下注時機..."
+            )
+
+            # 發送到精簡監控視窗
+            compact_data = {
+                "direction": first_strategy.get("direction", ""),
+                "amount": first_strategy.get("amount", 0),
+                "chips_str": f"{first_strategy.get('amount', 0):.0f}元",
+                "status": "pre_triggered"
+            }
+            self.compact_bet_status_updated.emit("pre_triggered", compact_data)
+
+        except Exception as e:
+            self.log_viewer.add_log("ERROR", "Dashboard", f"顯示預觸發失敗: {e}")
+            import traceback
+            self.log_viewer.add_log("ERROR", "Dashboard", traceback.format_exc())
 
     def on_bet_executed(self, bet_data: Dict[str, Any]) -> None:
         """

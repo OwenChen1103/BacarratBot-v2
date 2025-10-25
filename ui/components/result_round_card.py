@@ -43,6 +43,7 @@ class ResultRoundCard(QFrame):
         self.header_label = QLabel("⏳ 結果局 - 等待開獎")
         self.header_label.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
         self.header_label.setStyleSheet("color: #fbbf24;")
+        self.header_label_default = "⏳ 結果局 - 等待開獎"  # 儲存預設標題
         header_layout.addWidget(self.header_label)
 
         header_layout.addStretch()
@@ -158,14 +159,28 @@ class ResultRoundCard(QFrame):
         total_layers = data.get("total_layers", 0)
         round_id = data.get("round_id", "N/A")
         is_reverse = data.get("is_reverse", False)
+        status = data.get("status", "betting")  # ✅ 獲取狀態 (pre_triggered | betting)
+
+        # ✅ 根據狀態調整標題
+        if status == "pre_triggered":
+            self.header_label.setText("🎯 策略已觸發 - 等待下注時機")
+            self.header_label.setStyleSheet("color: #3b82f6;")  # 藍色表示預觸發
+        else:
+            self.header_label.setText(self.header_label_default)
+            self.header_label.setStyleSheet("color: #fbbf24;")  # 黃色表示已下注
 
         # 反向標記
         reverse_tag = ""
         if is_reverse:
             reverse_tag = " <span style='color:#f59e0b;font-weight:bold;'>(反向)</span>"
 
+        # ✅ 根據狀態調整顯示文字
+        status_text = ""
+        if status == "pre_triggered":
+            status_text = "<span style='color:#3b82f6;font-size:9px;'>(預觸發 - 尚未下注)</span>"
+
         info_text = (
-            f"<b>策略:</b> {strategy}<br>"
+            f"<b>策略:</b> {strategy} {status_text}<br>"
             f"<b>方向:</b> <span style='color:{direction_color};font-weight:bold;'>{direction_text}</span>{reverse_tag}<br>"
             f"<b>金額:</b> {amount} 元<br>"
             f"<b>層數:</b> 第 {current_layer}/{total_layers} 層<br>"
